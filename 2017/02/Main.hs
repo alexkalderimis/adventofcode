@@ -24,5 +24,7 @@ divRow = fromMaybe 0 . listToMaybe . catMaybes . fmap (uncurry divisable) . pair
 main :: IO ()
 main = do
   rows <- fmap (fmap read . words) . lines <$> getContents
-  putStrLn $ "MINMAX: " ++ (show . sum $ fmap checkRow rows)
-  putStrLn $ "DIVISIBLE: " ++ (show . sum $ fmap divRow rows)
+  putStrLn $ "MINMAX: "    ++ (showCheck checkRow rows)
+  putStrLn $ "DIVISIBLE: " ++ (showCheck divRow rows)
+    where
+      showCheck check = show . sum . fmap check
