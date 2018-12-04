@@ -3,14 +3,15 @@
 import qualified Text.ParserCombinators.ReadP as R
 import Control.Applicative
 import Data.Functor
+import Data.Bool
 import Data.Ord (comparing)
 import Data.Maybe
 import Data.Coerce
 import Data.Monoid hiding ((<>))
 import Data.Semigroup
-import qualified Data.IntMap as IM
+import qualified Data.Array as A
+import           Data.Array ((//))
 import qualified Data.Map as M
-import Data.IntMap (IntMap)
 import Text.Read (readsPrec)
 import Text.Printf (printf)
 import qualified Data.List as L
@@ -67,14 +68,20 @@ int = R.readS_to_P (readsPrec 10)
 type Log = [LogEntry]
 type Minute = Int
 type SleepPeriod = (Minute, Minute)
-newtype SleepPattern = SleepPattern { unSleepPattern :: IntMap Int } deriving (Show)
+newtype SleepPattern = SleepPattern { unSleepPattern :: A.Array Minute Int } deriving (Show)
+
+sleepPatternIx :: (Minute, Minute)
+sleepPatternIx = (0,59)
 
 instance Semigroup SleepPattern where
-  (<>) = coerce (IM.unionWith ((+) :: Int -> Int -> Int))
+  (SleepPattern p0) <> (SleepPattern p1) = SleepPattern (p0 // [(i, a + b) | (i, b) <- A.assocs p1, b /= 0, let a = p0 A.! i ])
 
 instance Monoid SleepPattern where
-  mempty = SleepPattern mempty
+  mempty = mkPattern (pure 0)
   mappend = (<>)
+
+mkPattern :: (Minute -> Int) -> SleepPattern
+mkPattern f = SleepPattern (A.listArray sleepPatternIx (fmap f $ A.range sleepPatternIx))
 
 sleepPeriods :: Log -> [SleepPeriod]
 sleepPeriods [] = []
@@ -85,8 +92,7 @@ isAsleep :: Minute -> SleepPeriod -> Bool
 isAsleep m (start, end) = m >= start && m < end
 
 sleepPattern :: [SleepPeriod] -> SleepPattern
-sleepPattern = foldMap $ \period -> SleepPattern $
-  IM.fromList [(m, if isAsleep m period then 1 else 0) | m <- [0 .. 59]]
+sleepPattern = foldMap $ \period -> mkPattern (\m -> if isAsleep m period then 1 else 0)
 
 sleepPatterns :: Log -> M.Map GuardId SleepPattern
 sleepPatterns = M.fromListWith (<>) . fmap (fmap (sleepPattern . sleepPeriods)) . groupGuard
@@ -102,17 +108,17 @@ sleepPatterns = M.fromListWith (<>) . fmap (fmap (sleepPattern . sleepPeriods)) 
     newShift _ = False
 
 totalSleep :: SleepPattern -> Int
-totalSleep = sum . IM.elems . unSleepPattern
+totalSleep = sum . A.elems . unSleepPattern
 
 sleepiestMinute :: SleepPattern -> Int
-sleepiestMinute = fst . L.maximumBy (comparing snd) . IM.toList . unSleepPattern
+sleepiestMinute = fst . L.maximumBy (comparing snd) . A.assocs . unSleepPattern
 
 sleepiestGuard :: M.Map GuardId SleepPattern -> (GuardId, SleepPattern)
 sleepiestGuard = L.maximumBy (comparing (totalSleep . snd)) . M.toList
 
 mostReliable :: M.Map GuardId SleepPattern -> (GuardId, SleepPattern)
 mostReliable = L.maximumBy (comparing peak) . M.toList
-  where peak = safeMax . IM.elems . unSleepPattern . snd
+  where peak = safeMax . A.elems . unSleepPattern . snd
         safeMax [] = Nothing
         safeMax xs = Just (maximum xs)
    
@@ -121,10 +127,9 @@ display p = ("Total Sleep: " <> show (totalSleep p))
           : ("Sleepiest minute: " <> show (sleepiestMinute p))
           : fmap displayRow (reverse [1 .. maxSleep])
   where
-    asleepAtLeast x m = maybe False (x <=) $ IM.lookup m (unSleepPattern p)
-    displayRow lim = printf "%02d: " lim <> fmap (displayMin lim) [0 .. 59]
-    displayMin lim min = if asleepAtLeast lim min then 'x' else '.'
-    maxSleep = maximum . IM.elems . unSleepPattern $ p
+    displayRow lim = printf "%02d: " lim
+                   <> A.elems (fmap (bool '.' 'x' . (lim <=)) (unSleepPattern p))
+    maxSleep       = maximum . A.elems . unSleepPattern $ p
 
 main :: IO ()
 main = do
