@@ -45,11 +45,11 @@ mids i = let (a,b,c,d) = corners i
           in (a - i, b - i, c - i, d - i)
 
 rank :: Addr -> Rank
-rank = go 0 0 . subtract 1
+rank addr = go 0 0
   where
-    go i rankStart addr = if addr < rankStart + size i
-                             then i
-                             else go (i + 1) (rankStart + size i) addr
+    addr' = addr - 1
+    go i rankStart | addr' < rankStart + size i = i
+    go i rankStart = go (i + 1) (rankStart + size i)
 
 -- this is the faster implementation, but the one below is simpler
 manhattan :: Addr -> Int
