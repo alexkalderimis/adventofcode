@@ -1,8 +1,10 @@
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE BangPatterns #-}
+
 import Data.Array.ST
 import Data.Ix
 import Data.Array.MArray
 import Control.Monad.ST
-import Control.Monad.State.Strict
 
 -- we are going to thrash the instructions
 -- and we need random access, with bounds checking,
@@ -25,23 +27,22 @@ jumps :: [Int] -> ST s (Jumps s)
 jumps input = newListArray (0, length input - 1) input
 
 runJumps :: (Int -> Int) -> [Int] -> Int
-runJumps onJump input = snd $ runST $ do
-  a <- jumps input
-  execStateT (jump onJump a) (0, 0)
+runJumps onJump input = runST $ do
+  a     <- jumps input
+  check <- inRange <$> getBounds a
+  jump onJump check a
 
 -- the jump loop
 -- Takes a jump modifier, performed after each instruction
+-- a bounds check (lifted out of the loop for efficiency)
 -- the jump array itself
--- and the state of: (currentAddress, number of jumps performed)
-jump :: (Int -> Int) -> Jumps s -> StateT (Int, Int) (ST s) ()
-jump f a = go
-  where go = do (addr, n) <- get
-                v <- lift (readArray a addr)
-                b <- lift (getBounds a)
-                let addr' = addr + v
-                if inRange b addr'
-                   then do lift (writeArray a addr (f v))
-                           put (addr', n + 1)
-                           go
-                   else return ()
-
+jump :: (Int -> Int) -> (Int -> Bool) -> Jumps s -> ST s Int
+jump f check a = go 0 0
+  where
+    go !addr !n = do
+            offset <- readArray a addr
+            let nextAddr = addr + offset
+                steps = n + 1
+            if check nextAddr
+               then writeArray a addr (f offset) >> go nextAddr steps
+               else return steps
