@@ -1,7 +1,7 @@
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE TupleSections #-}
 {-# LANGUAGE MultiWayIf #-}
 
-import qualified Debug.Trace as Debug
 import Data.IntPSQ as PSQ
 import Data.Semigroup
 import           Data.List.NonEmpty (NonEmpty)
@@ -16,6 +16,11 @@ import qualified Data.Ix as Ix
 import qualified Data.List as L
 import Data.Char (toUpper)
 import Control.Applicative
+
+-- This exercise has three solutions, playing with techniques and
+-- looking for performance.
+-- Flood fill in particular could be improved with some better data
+-- structures
 
 data Coord
   = Coord { _x :: {-# UNPACK #-} !Int
@@ -50,6 +55,17 @@ data FillState
               , contested :: S.Set Coord
               , iterations :: Int
               } deriving Show
+
+safeZone :: Int -> BoundingBox -> [Coord] -> S.Set Coord
+safeZone upperBound bb cs
+  = S.fromList
+  . fmap fst
+  . filter ((< upperBound) . snd)
+  . fmap (\c -> (c, manhattanSum c))
+  $ Ix.range (bounds bb)
+    where
+      manhattanSum c = sum $ fmap (manhattan c) cs
+
 
 floodFill :: [Coord] -> Maybe FillState
 floodFill cs = do
@@ -121,6 +137,30 @@ step bb fs =
                            uncontested = M.map (S.filter ((1 ==) . (newClaims M.!))) wave
                         in (uncontested, M.keysSet (M.filter (> 1) newClaims))
 
+--- The naive implementation
+-- this was added to check performance, and the other two implementations
+-- are definitely faster.
+
+naive :: BoundingBox -> [Coord] -> Maybe (Coord, Int)
+naive bb cs
+  = listToMaybe
+  . L.sortBy (comparing $ Down . snd)
+  . M.toList
+  . M.fromListWith (+)
+  . filter (notEscaped . fst)
+  . (>>= \(c, mowner) -> maybe [] (pure . (,1)) mowner)
+  . fmap (\c -> (c, uniqClosest c))
+  $ Ix.range (bounds bb)
+    where
+      notEscaped = flip S.notMember infiniteEmpires
+      infiniteEmpires = S.fromList . catMaybes $ do
+        c <- Ix.range (bounds bb)
+        guard (onEdge bb c)
+        return (uniqClosest c)
+      uniqClosest c = case L.sortBy (comparing $ manhattan c) cs of
+        (a:b:_) | manhattan a c == manhattan b c -> Nothing
+        (a:_) -> Just a
+
 --- an RTree based implementation
 
 data RTree a = Leaf Coord a
@@ -144,17 +184,19 @@ biggestFiniteEmpire bb tree
   $ (>>= (maybeToList . uniqClosest))
   $ Ix.range (bounds bb)
     where
-      onEdge (Coord x y) = x == _x (topLeft bb) ||
-                           x == _x (topRight bb) ||
-                           y == _y (topLeft bb) ||
-                           y == _y (btmLeft bb)
       uniqClosest c = case take 2 $ nearest tree c of
         [a,b] | manhattan a c == manhattan b c -> Nothing
         (a:_) -> Just a
       infiniteEmpires = S.fromList . catMaybes $ do
         c <- Ix.range (bounds bb)
-        guard (onEdge c)
+        guard (onEdge bb c)
         return (uniqClosest c)
+
+onEdge :: BoundingBox -> Coord -> Bool
+onEdge bb (Coord x y) = x == _x (topLeft bb) ||
+                        x == _x (topRight bb) ||
+                        y == _y (topLeft bb) ||
+                        y == _y (btmLeft bb)
 
 displayRTree :: M.Map Coord Char -> BoundingBox -> RTree Coord -> [String]
 displayRTree names bb tree = fmap row [_y (topLeft bb) - 1 .. _y (btmRight bb) + 1]
@@ -169,6 +211,17 @@ displayRTree names bb tree = fmap row [_y (topLeft bb) - 1 .. _y (btmRight bb) +
                          then '.'
                          else fromMaybe '?' (M.lookup a names)
 
+displaySafeZone :: M.Map Coord Char -> BoundingBox -> S.Set Coord -> [String]
+displaySafeZone names bb safe = fmap row [_y (topLeft bb) - 1 .. _y (btmRight bb) + 1]
+  where
+    row y = do
+     x <- [_x (topLeft bb) - 1 .. _x (btmRight bb) + 1]
+     let c = Coord x y
+     return $ case (M.lookup c names, S.member c safe) of
+       (Just name, _) -> toUpper name
+       (_, True)      -> '#'
+       _              -> '.'
+
 nearest :: Show a => RTree a -> Coord -> [a]
 nearest t c = go 1 (insertTree 0 t PSQ.empty)
   where
@@ -178,8 +231,8 @@ nearest t c = go 1 (insertTree 0 t PSQ.empty)
     go n q = case PSQ.minView q of
                Nothing -> []
                Just (_, _, t, q') -> case t of
-                 Tip      -> []
-                 Leaf _ a -> a : go (n + 1) q'
+                 Tip          -> []
+                 Leaf _ a     -> a : go (n + 1) q'
                  Region _ l r -> go (n + 2) (insertTree n l $ insertTree (n + 1) r $ q')
 
 bounds :: BoundingBox -> (Coord, Coord)
@@ -267,8 +320,7 @@ boundingBox cs = do
     cmp x small big = (min small x, max big x)
     
 main :: IO ()
-main = do
-  getContents >>= run
+main = getContents >>= run
 
 run :: String -> IO ()
 run inputData = do
@@ -277,7 +329,17 @@ run inputData = do
     Nothing -> error "Could not establish bounding box"
     Just bb -> do doFloodFill coords
                   doRTree bb coords
+                  doNaive bb coords
+                  doSafeZone bb coords
   where
+    doSafeZone bb cs = do
+      let safe = safeZone 10000 bb cs
+      putStrLn $ "SAFE ZONE SIZE: " ++ show (S.size safe)
+    doNaive bb cs = do
+      putStrLn "NAIVE"
+      case naive bb cs of
+        Nothing -> putStrLn "Naive didn't work"
+        Just (c,n) -> do putStrLn $ show c ++ ": " ++ show n
     doFloodFill cs = do
       case floodFill cs >>= currentBiggestFiniteEmpire of
         Nothing -> putStrLn "Could not perform flood fill"
