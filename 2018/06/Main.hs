@@ -2,10 +2,9 @@
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE MultiWayIf #-}
 
+import qualified Data.Time.Clock as Clock
 import Data.IntPSQ as PSQ
 import Data.Semigroup
-import           Data.List.NonEmpty (NonEmpty)
-import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Data.Maybe
@@ -44,6 +43,9 @@ data BoundingBox
        , btmLeft  :: Coord
        , btmRight :: Coord
        } deriving (Show)
+
+bounds :: BoundingBox -> (Coord, Coord)
+bounds bb = (topLeft bb, btmRight bb)
 
 type Empire = S.Set Coord
 
@@ -127,19 +129,15 @@ step bb fs =
           guard (S.notMember n (claimed fs))
           guard (S.notMember n (contested fs))
           return n
-        outOfBounds (Coord x y) = or [x < _x (topLeft bb)
-                                     ,x > _x (topRight bb)
-                                     ,y < _y (topLeft bb)
-                                     ,y > _y (btmLeft bb)
-                                     ]
+        outOfBounds = not . Ix.inRange (bounds bb)
         escapees wave = S.fromList [ c | (c, cs) <- M.toList wave, any outOfBounds cs ] 
         contest wave = let newClaims = M.unionsWith (+) . fmap (M.fromSet (pure 1)) $ M.elems wave
                            uncontested = M.map (S.filter ((1 ==) . (newClaims M.!))) wave
                         in (uncontested, M.keysSet (M.filter (> 1) newClaims))
 
---- The naive implementation
--- this was added to check performance, and the other two implementations
--- are definitely faster.
+--- The naive implementation.
+-- This is just as fast as the RTree solution, when O2 is enabled, without
+-- optimisation or in ghci, it is much slower.
 
 naive :: BoundingBox -> [Coord] -> Maybe (Coord, Int)
 naive bb cs
@@ -179,9 +177,9 @@ biggestFiniteEmpire bb tree
   $ L.sortBy (comparing (Down . snd))
   $ M.toList
   $ M.fromListWith (+)
-  $ fmap (\c -> (c,1))
+  $ fmap (,1)
   $ filter (`S.notMember` infiniteEmpires)
-  $ (>>= (maybeToList . uniqClosest))
+  $ (>>= maybeToList . uniqClosest)
   $ Ix.range (bounds bb)
     where
       uniqClosest c = case take 2 $ nearest tree c of
@@ -222,6 +220,8 @@ displaySafeZone names bb safe = fmap row [_y (topLeft bb) - 1 .. _y (btmRight bb
        (_, True)      -> '#'
        _              -> '.'
 
+-- nearest neighour search in the RTree
+-- see priorityDistance for calculation of distance
 nearest :: Show a => RTree a -> Coord -> [a]
 nearest t c = go 1 (insertTree 0 t PSQ.empty)
   where
@@ -231,12 +231,9 @@ nearest t c = go 1 (insertTree 0 t PSQ.empty)
     go n q = case PSQ.minView q of
                Nothing -> []
                Just (_, _, t, q') -> case t of
-                 Tip          -> []
+                 Tip          -> go (n + 1) q'
                  Leaf _ a     -> a : go (n + 1) q'
                  Region _ l r -> go (n + 2) (insertTree n l $ insertTree (n + 1) r $ q')
-
-bounds :: BoundingBox -> (Coord, Coord)
-bounds bb = (topLeft bb, btmRight bb)
 
 placement :: BoundingBox -> Coord -> Placement
 placement bb c@(Coord x y)
@@ -325,31 +322,37 @@ main = getContents >>= run
 run :: String -> IO ()
 run inputData = do
   let coords = fmap parseCoord . lines $ inputData
+      tree = index (zip coords coords)
   case boundingBox coords of
     Nothing -> error "Could not establish bounding box"
-    Just bb -> do doFloodFill coords
-                  doRTree bb coords
-                  doNaive bb coords
-                  doSafeZone bb coords
+    Just bb -> do time $ doFloodFill coords
+                  time $ doRTree bb tree
+                  time $ doNaive bb coords
+                  time $ doSafeZone bb coords
   where
+    hline title = putStrLn (replicate 20 '-') >> putStrLn title
+    time act = do
+      start <- Clock.getCurrentTime
+      act
+      end <- Clock.getCurrentTime
+      print (Clock.diffUTCTime end start)
     doSafeZone bb cs = do
       let safe = safeZone 10000 bb cs
-      putStrLn $ "SAFE ZONE SIZE: " ++ show (S.size safe)
+      hline "SAFE ZONE SIZE"
+      putStrLn $ show (S.size safe)
     doNaive bb cs = do
-      putStrLn "NAIVE"
+      hline "NAIVE"
       case naive bb cs of
         Nothing -> putStrLn "Naive didn't work"
         Just (c,n) -> do putStrLn $ show c ++ ": " ++ show n
     doFloodFill cs = do
+      hline "FLOOD FILL: "
       case floodFill cs >>= currentBiggestFiniteEmpire of
         Nothing -> putStrLn "Could not perform flood fill"
-        Just (coord, s) -> do
-          putStrLn "FLOOD FILL: "
-          putStrLn $ show coord ++ ": " ++ show (S.size s)
-    doRTree bb cs = do
-      let tree = index (zip cs cs)
+        Just (coord, s) -> putStrLn $ show coord ++ ": " ++ show (S.size s)
+    doRTree bb tree = do
+      hline "RTree"
       case biggestFiniteEmpire bb tree of
         Nothing -> putStrLn "Could use RTree"
         Just (c,n) -> do
-          putStrLn "RTree"
           putStrLn $ show c ++ ": " ++ show n

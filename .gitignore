@@ -1,3 +1,6 @@
+Main
+.stack-work/
+adventofcode.cabal
 *.o
 *.hi
-Main
+*~
