@@ -1,31 +1,65 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE MultiWayIf #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE LambdaCase #-}
 
-import qualified Data.Time.Clock as Clock
-import Data.IntPSQ as PSQ
-import Data.Semigroup
-import qualified Data.Map.Strict as M
-import qualified Data.Set as S
-import Data.Maybe
-import Control.Monad
-import Data.Foldable
-import Data.Ord
+import           Control.Applicative
+import           Control.Monad
+import           Control.Monad.ST as ST
+import           Data.Array.ST (STArray, freeze, newArray, writeArray, readArray)
+import qualified Data.Array as A
+import qualified Data.Array.ST as STA
+import           Data.Char (toUpper)
+import           Data.Foldable
+import           Data.IntPSQ as PSQ
+import           Data.Maybe
+import           Data.Ord
 import qualified Data.Ix as Ix
 import qualified Data.List as L
-import Data.Char (toUpper)
-import Control.Applicative
+import qualified Data.Map.Strict as M
+import qualified Data.Set as S
+import qualified Data.Time.Clock as Clock
 
 -- This exercise has three solutions, playing with techniques and
 -- looking for performance.
--- Flood fill in particular could be improved with some better data
--- structures
+-- 
+-- In order of performance we have:
+--   * flood-fill, which iteratively fills the field with straight-line
+--   neighbours. This makes use of localised safe mutable arrays for
+--   efficiency
+--   * rtree, which uses a spacial index to look for nearest neighbours
+--   efficiently
+--   * The naive approach for reference, which checks every point
+--   for every input node, so O(nxm).
+--
+-- Current example output: 
+-- --------------------
+--  FLOOD FILL:
+--  <170,240>: 3907
+--  0.147134s
+--  --------------------
+--  RTree
+--  <170,240>: 3907
+--  0.186773s
+--  --------------------
+--  NAIVE
+--  <170,240>: 3907
+--  0.213381s
+--  --------------------
+--  SAFE ZONE SIZE
+--  42036
+--  0.033237s
 
+-- strict unpacked tuples
 data Coord
   = Coord { _x :: {-# UNPACK #-} !Int
           , _y :: {-# UNPACK #-} !Int
           }
-          deriving (Show, Ord, Eq)
+          deriving (Ord, Eq)
+
+instance Show Coord where
+  show (Coord x y) = concat ["<", show x, ",", show y, ">"]
 
 parseCoord :: String -> Coord
 parseCoord s = case break (== ',') s of
@@ -44,20 +78,44 @@ data BoundingBox
        , btmRight :: Coord
        } deriving (Show)
 
+boundingBox :: [Coord] -> Maybe BoundingBox
+boundingBox cs = do
+  (minX,maxX) <- minmax (_x <$> cs)
+  (minY,maxY) <- minmax (_y <$> cs)
+  return $ BB { topLeft = Coord minX minY
+              , topRight = Coord maxX minY
+              , btmLeft = Coord minX maxY
+              , btmRight = Coord maxX maxY
+              }
+  where
+    minmax = foldl' (\mp x -> fmap (uncurry $ cmp x) mp <|> Just (x,x)) Nothing
+    cmp x small big = (min small x, max big x)
+    
 bounds :: BoundingBox -> (Coord, Coord)
 bounds bb = (topLeft bb, btmRight bb)
 
-type Empire = S.Set Coord
+unbounds :: (Coord, Coord) -> BoundingBox
+unbounds ((Coord x0 y0), (Coord x1 y1))
+  = BB { topLeft  = Coord x0 y0
+       , topRight = Coord x1 y0
+       , btmLeft  = Coord x0 y1
+       , btmRight = Coord x1 y1
+       }
 
-data FillState
-  = FillState { empires :: M.Map Coord Empire
-              , frontier :: M.Map Coord Empire
-              , escaped :: S.Set Coord
-              , claimed :: S.Set Coord
-              , contested :: S.Set Coord
-              , iterations :: Int
-              } deriving Show
+data Ownership = Unclaimed
+               | Disputed
+               | Owned {-# UNPACK #-} !Coord
+               deriving (Show)
 
+owner :: (Applicative f, MonadPlus f) => Ownership -> f Coord
+owner (Owned x) = pure x
+owner _         = mzero
+
+claimed :: Ownership -> Bool
+claimed Unclaimed = False
+claimed _         = True
+
+-- Safe zone impl. Pt2 of the exercise
 safeZone :: Int -> BoundingBox -> [Coord] -> S.Set Coord
 safeZone upperBound bb cs
   = S.fromList
@@ -67,147 +125,6 @@ safeZone upperBound bb cs
   $ Ix.range (bounds bb)
     where
       manhattanSum c = sum $ fmap (manhattan c) cs
-
-
-floodFill :: [Coord] -> Maybe FillState
-floodFill cs = do
-  bb <- boundingBox cs
-  return $ go bb (initFillState cs)
-  where
-    go bb fs = let fs' = step bb fs
-                in if all S.null (M.elems $ frontier fs')
-                      then fs'
-                      else go bb fs'
-
--- because we move along manhattan distance, we only move in straight lines, and
--- we only consider 4 neighbours at each fill
-neighbours :: Coord -> [Coord]
-neighbours (Coord x y) = [                 Coord x (pred y)
-                         ,Coord (pred x) y                 , Coord (succ x) y
-                                           ,Coord x (succ y)
-                         ]
-
-initFillState :: [Coord] -> FillState
-initFillState cs =
-  let empires = M.fromList [(c, S.singleton c) | c <- L.nub cs]
-   in FillState { empires = empires
-                , frontier = empires
-                , escaped = mempty
-                , claimed = S.fromList cs
-                , contested = mempty
-                , iterations = 0
-                }
-
-type Owners = M.Map Coord Coord
-
-owners :: FillState -> Owners
-owners fs = M.unions [M.fromSet (pure capital) empire | (capital, empire) <- M.toList (empires fs)]
-
-currentBiggestFiniteEmpire :: FillState -> Maybe (Coord, S.Set Coord)
-currentBiggestFiniteEmpire fs = listToMaybe
-                              . dropWhile (\(c,_) -> S.member c (escaped fs))
-                              . L.sortBy (comparing (Down . S.size . snd))
-                              . M.toList
-                              $ empires fs
-
-step :: BoundingBox -> FillState -> FillState
-step bb fs =
-  let wave = M.mapWithKey advance (frontier fs)
-      (uncontested, conflicts) = contest wave
-      claimed' = foldl' S.union (claimed fs) (M.elems wave)
-   in fs { empires = M.unionWith S.union uncontested (empires fs)
-         , frontier = M.map (S.filter (not . outOfBounds)) wave
-         , escaped = S.union (escapees uncontested) (escaped fs)
-         , claimed = claimed'
-         , contested = S.union (contested fs) conflicts
-         , iterations = 1 + iterations fs
-         }
-  where advance capital fnt = S.fromList $ do
-          c <- S.toList fnt
-          n <- neighbours c
-          guard (manhattan n capital > manhattan c capital)
-          guard (S.notMember n (claimed fs))
-          guard (S.notMember n (contested fs))
-          return n
-        outOfBounds = not . Ix.inRange (bounds bb)
-        escapees wave = S.fromList [ c | (c, cs) <- M.toList wave, any outOfBounds cs ] 
-        contest wave = let newClaims = M.unionsWith (+) . fmap (M.fromSet (pure 1)) $ M.elems wave
-                           uncontested = M.map (S.filter ((1 ==) . (newClaims M.!))) wave
-                        in (uncontested, M.keysSet (M.filter (> 1) newClaims))
-
---- The naive implementation.
--- This is just as fast as the RTree solution, when O2 is enabled, without
--- optimisation or in ghci, it is much slower.
-
-naive :: BoundingBox -> [Coord] -> Maybe (Coord, Int)
-naive bb cs
-  = listToMaybe
-  . L.sortBy (comparing $ Down . snd)
-  . M.toList
-  . M.fromListWith (+)
-  . filter (notEscaped . fst)
-  . (>>= \(c, mowner) -> maybe [] (pure . (,1)) mowner)
-  . fmap (\c -> (c, uniqClosest c))
-  $ Ix.range (bounds bb)
-    where
-      notEscaped = flip S.notMember infiniteEmpires
-      infiniteEmpires = S.fromList . catMaybes $ do
-        c <- Ix.range (bounds bb)
-        guard (onEdge bb c)
-        return (uniqClosest c)
-      uniqClosest c = case L.sortBy (comparing $ manhattan c) cs of
-        (a:b:_) | manhattan a c == manhattan b c -> Nothing
-        (a:_) -> Just a
-
---- an RTree based implementation
-
-data RTree a = Leaf Coord a
-             | Tip
-             | Region BoundingBox (RTree a) (RTree a)
-             deriving (Show)
-
-data Placement = TL | Above  | TR
-               | L  | Inside | R
-               | BL | Below  | BR
-               deriving (Show)
-
-biggestFiniteEmpire :: BoundingBox -> RTree Coord -> Maybe (Coord, Int)
-biggestFiniteEmpire bb tree
-  = listToMaybe
-  $ L.sortBy (comparing (Down . snd))
-  $ M.toList
-  $ M.fromListWith (+)
-  $ fmap (,1)
-  $ filter (`S.notMember` infiniteEmpires)
-  $ (>>= maybeToList . uniqClosest)
-  $ Ix.range (bounds bb)
-    where
-      uniqClosest c = case take 2 $ nearest tree c of
-        [a,b] | manhattan a c == manhattan b c -> Nothing
-        (a:_) -> Just a
-      infiniteEmpires = S.fromList . catMaybes $ do
-        c <- Ix.range (bounds bb)
-        guard (onEdge bb c)
-        return (uniqClosest c)
-
-onEdge :: BoundingBox -> Coord -> Bool
-onEdge bb (Coord x y) = x == _x (topLeft bb) ||
-                        x == _x (topRight bb) ||
-                        y == _y (topLeft bb) ||
-                        y == _y (btmLeft bb)
-
-displayRTree :: M.Map Coord Char -> BoundingBox -> RTree Coord -> [String]
-displayRTree names bb tree = fmap row [_y (topLeft bb) - 1 .. _y (btmRight bb) + 1]
-  where
-    row y = do
-     x <- [_x (topLeft bb) - 1 .. _x (btmRight bb) + 1]
-     let c = Coord x y
-     return $ case (M.lookup c names) of
-       Just name -> toUpper name
-       Nothing -> let [a,b] = take 2 (nearest tree c)
-                   in if manhattan a c == manhattan b c
-                         then '.'
-                         else fromMaybe '?' (M.lookup a names)
 
 displaySafeZone :: M.Map Coord Char -> BoundingBox -> S.Set Coord -> [String]
 displaySafeZone names bb safe = fmap row [_y (topLeft bb) - 1 .. _y (btmRight bb) + 1]
@@ -220,34 +137,152 @@ displaySafeZone names bb safe = fmap row [_y (topLeft bb) - 1 .. _y (btmRight bb
        (_, True)      -> '#'
        _              -> '.'
 
--- nearest neighour search in the RTree
--- see priorityDistance for calculation of distance
-nearest :: Show a => RTree a -> Coord -> [a]
-nearest t c = go 1 (insertTree 0 t PSQ.empty)
+-- General reusable components of the different approaches
+
+-- Given the nearest-neighbour search function, produces the result
+generalResult :: (Coord -> [Coord]) -> BoundingBox -> Maybe (Coord, Int)
+generalResult uniqClosest bb
+  = listToMaybe
+  . L.sortBy (comparing $ Down . snd)
+  . M.toList
+  . M.fromListWith (+)
+  . fmap (,1)
+  . filter notEscaped
+  $ (Ix.range (bounds bb) >>= uniqClosest)
+    where
+      notEscaped = flip S.notMember escaped
+      escaped = escapees uniqClosest bb
+
+onEdge :: BoundingBox -> Coord -> Bool
+onEdge bb (Coord x y) = x == _x (topLeft bb) ||
+                        x == _x (topRight bb) ||
+                        y == _y (topLeft bb) ||
+                        y == _y (btmLeft bb)
+
+escapees :: (Coord -> [Coord]) -> BoundingBox -> S.Set Coord
+escapees uniqClosest bb = S.fromList $ do
+  c <- Ix.range (bounds bb)
+  guard (onEdge bb c)
+  uniqClosest c
+
+-- Flood fill approach:
+
+type Field = A.Array Coord Ownership
+
+drawField :: (M.Map Coord Char) -> Field -> [String]
+drawField names field = fmap row rows
   where
-    insertTree n t = case priorityDistance c t of
-      Nothing -> id
-      Just p  -> PSQ.insert n p t
-    go n q = case PSQ.minView q of
-               Nothing -> []
-               Just (_, _, t, q') -> case t of
-                 Tip          -> go (n + 1) q'
-                 Leaf _ a     -> a : go (n + 1) q'
-                 Region _ l r -> go (n + 2) (insertTree n l $ insertTree (n + 1) r $ q')
+    bs = A.bounds field
+    rows = [_y (fst bs) .. _y (snd bs)]
+    cols = [_x (fst bs) .. _x (snd bs)]
+    row y = do
+     x <- cols
+     let c = Coord x y
+     return $ case (M.lookup c names, field A.! c) of
+       (Just name, _) -> toUpper name
+       (_, Unclaimed) -> ' '
+       (_, Disputed)  -> '.'
+       (_, Owned owner) -> fromMaybe '?' (M.lookup owner names)
 
-placement :: BoundingBox -> Coord -> Placement
-placement bb c@(Coord x y)
-  | Ix.inRange (bounds bb) c                   = Inside
-  | x < _x (topLeft bb) = if | y < _y (topLeft bb) -> TL
-                             | y > _y (btmLeft bb) -> BL
-                             | otherwise           -> L
-  | x > _x (topRight bb) = if | y < _y (topRight bb) -> TR
-                              | y > _y (btmRight bb) -> BR
-                              | otherwise            -> R
-  | y < _y (topLeft bb) = Above
-  | y > _y (btmLeft bb) = Below
-  | otherwise = error "impossible"
+floodFill :: [Coord] -> Maybe Field
+floodFill cs = do
+  bb <- boundingBox cs
+  return $ runST $ do
+    field <- newArray (bounds bb) Unclaimed
+    mapM_ (\c -> writeArray field c (Owned c)) cs
+    go field (M.fromList [(c, S.singleton c) | c <- cs])
+  where
+    go field frontier = do
+      frontier' <- step field frontier
+      if all S.null (M.elems frontier')
+         then freeze field
+         else go field frontier'
 
+-- because we move along manhattan distance, we only move in straight lines, and
+-- we only consider 4 neighbours at each fill
+neighbours :: Coord -> [Coord]
+neighbours (Coord x y) = [                 Coord x (pred y)
+                         ,Coord (pred x) y                 , Coord (succ x) y
+                                           ,Coord x (succ y)
+                         ]
+
+fieldResult :: Field -> Maybe (Coord, Int)
+fieldResult fld = generalResult uniqClosest (unbounds $ A.bounds fld)
+    where 
+      uniqClosest c = owner (fld A.! c)
+
+countClaims :: Field -> M.Map Coord Int
+countClaims = M.fromListWith (+) . (>>= claimCount) . A.elems
+  where
+      claimCount o = (,1) <$> owner o
+
+-- the escapees from the field, i.e those on the edges
+-- which have infinite fields
+fieldEscapees :: Field -> S.Set Coord
+fieldEscapees fld = escapees (owner . (fld A.!)) (unbounds $ A.bounds fld)
+
+type Frontier = M.Map Coord (S.Set Coord)
+
+step :: STArray s Coord Ownership -> Frontier -> ST s Frontier
+step field frontier = do
+  bs   <- STA.getBounds field
+  wave <- M.traverseWithKey (advance bs) frontier
+  let (uncontested, conflicts) = contest wave
+  mapM_ writeClaims (M.toList uncontested)
+  mapM_ writeConflict conflicts
+  return wave
+
+    where
+      -- store claims and disputes in the field
+      writeClaims (owner, claims) = flip mapM_ claims $ \claim ->
+        writeArray field claim (Owned owner)
+      writeConflict c =
+        writeArray field c Disputed
+      -- a claim is uncontested if it is only claimed once
+      contest wave =
+        let newClaims = M.unionsWith (+) . fmap (M.fromSet (pure 1)) $ M.elems wave
+            uncontested = S.filter ((1 ==) . (newClaims M.!))
+         in (M.map uncontested wave, M.keysSet (M.filter (> 1) newClaims))
+      -- the next wave is all the straight-line neighbours of this frontier
+      -- that are further from the group origin than the frontier
+      nextWave bs origin frontLine = do
+        c <- S.toList frontLine
+        n <- neighbours c
+        guard (Ix.inRange bs n)
+        guard (manhattan origin n > manhattan origin c)
+        pure n
+      onlyUnclaimed = filterM (fmap (not.claimed) . readArray field)
+      advance bs capital frontLine =
+        S.fromList <$> onlyUnclaimed (nextWave bs capital frontLine)
+
+
+--- The naive implementation.
+-- This is not really slower than the RTree solution, when O2 is enabled.
+-- However without optimisation or in ghci, it is much slower.
+--
+-- It is however much shorter though.
+
+naive :: BoundingBox -> [Coord] -> Maybe (Coord, Int)
+naive bb cs = generalResult uniqClosest bb
+    where
+      uniqClosest c = case L.sortBy (comparing $ manhattan c) cs of
+        (a:b:_) | manhattan a c == manhattan b c -> mzero
+        (a:_)                                    -> pure a
+
+--- an RTree based implementation
+-- This is faster than the naive solution, but only just
+
+data RTree a = Leaf Coord a
+             | Tip
+             | Region BoundingBox (RTree a) (RTree a)
+             deriving (Show)
+
+data Placement = TL | Above  | TR
+               | L  | Inside | R
+               | BL | Below  | BR
+               deriving (Show)
+
+-- index an association list of coordinates into an RTree
 index :: [(Coord, a)] -> RTree a
 index = go 0
   where
@@ -263,6 +298,55 @@ index = go 0
          in Region bb (go m as) (go m bs)
       _ -> error "impossible"
 
+treeResult :: BoundingBox -> RTree Coord -> Maybe (Coord, Int)
+treeResult bb tree = generalResult uniqClosest bb
+    where
+      uniqClosest c = case take 2 $ nearest tree c of
+        [(a,da),(b,db)] | da == db -> mzero
+        ((a,_):_)                  -> pure a
+
+displayRTree :: M.Map Coord Char -> BoundingBox -> RTree Coord -> [String]
+displayRTree names bb tree = fmap row [_y (topLeft bb) .. _y (btmRight bb)]
+  where
+    row y = do
+     x <- [_x (topLeft bb) .. _x (btmRight bb)]
+     let c = Coord x y
+     return $ case (M.lookup c names) of
+       Just name -> toUpper name
+       Nothing -> let [(a,da),(b,db)] = take 2 (nearest tree c)
+                   in if da == db
+                         then '.'
+                         else fromMaybe '?' (M.lookup a names)
+
+
+-- nearest neighour search in the RTree
+-- Returns the value and its distance
+nearest :: Show a => RTree a -> Coord -> [(a, Int)]
+nearest t c = go 1 (insertTree 0 t PSQ.empty)
+  where
+    insertTree n t = case priorityDistance c t of
+      Nothing -> id
+      Just p  -> PSQ.insert n p t
+    go n q = case PSQ.minView q of
+               Nothing -> []
+               Just (_, p, t, q') -> case t of
+                 Tip          -> go (n + 1) q'
+                 Leaf _ a     -> (a,p) : go (n + 1) q'
+                 Region _ l r -> go (n + 2) (insertTree n l $ insertTree (n + 1) r $ q')
+
+placement :: BoundingBox -> Coord -> Placement
+placement bb c@(Coord x y)
+  | Ix.inRange (bounds bb) c                   = Inside
+  | x < _x (topLeft bb) = if | y < _y (topLeft bb) -> TL
+                             | y > _y (btmLeft bb) -> BL
+                             | otherwise           -> L
+  | x > _x (topRight bb) = if | y < _y (topRight bb) -> TR
+                              | y > _y (btmRight bb) -> BR
+                              | otherwise            -> R
+  | y < _y (topLeft bb) = Above
+  | y > _y (btmLeft bb) = Below
+  | otherwise = error "impossible"
+
 priorityDistance :: Coord -> RTree a -> Maybe Int
 priorityDistance _ Tip = Nothing
 priorityDistance c (Leaf loc _) = Just $ manhattan c loc
@@ -277,17 +361,7 @@ priorityDistance c (Region bb@BB{..} _ _) = return . manhattan c $ case placemen
   Below  -> Coord (_x c) (_y btmLeft)
   BR     -> btmRight
 
-drawFillState :: (M.Map Coord Char) -> BoundingBox -> Owners -> [String]
-drawFillState names bb owners = fmap row [_y (topLeft bb) - 1 .. _y (btmRight bb) + 1]
-  where
-    row y = do
-     x <- [_x (topLeft bb) - 1 .. _x (btmRight bb) + 1]
-     let c = Coord x y
-     return $ case (M.lookup c names, M.lookup c owners) of
-       (Just name, _) -> toUpper name
-       (_, Just p)    -> fromMaybe '?' (M.lookup p names)
-       _              -> '.'
-
+-- the manhattan distance calculation
 manhattan :: Coord -> Coord -> Int
 manhattan a b = straightedge _x a b + straightedge _y a b
   where
@@ -303,21 +377,29 @@ examplePoints = fmap (uncurry Coord)
   ,(8, 9)
   ]
 
-boundingBox :: [Coord] -> Maybe BoundingBox
-boundingBox cs = do
-  (minX,maxX) <- minmax (_x <$> cs)
-  (minY,maxY) <- minmax (_y <$> cs)
-  return $ BB { topLeft = Coord minX minY
-              , topRight = Coord maxX minY
-              , btmLeft = Coord minX maxY
-              , btmRight = Coord maxX maxY
-              }
-  where
-    minmax = foldl' (\mp x -> fmap (uncurry $ cmp x) mp <|> Just (x,x)) Nothing
-    cmp x small big = (min small x, max big x)
-    
 main :: IO ()
 main = getContents >>= run
+
+example :: IO ()
+example = do
+  let Just bb = boundingBox examplePoints
+      Just fld = floodFill examplePoints
+      names = M.fromList (zip examplePoints ['a' .. ])
+      tree = index (zip examplePoints examplePoints)
+  putStrLn "flood-fill"
+  draw (drawField names fld)
+  traverse_ print (fieldResult fld)
+  putStrLn "SIZES"
+  print (countClaims fld)
+  putStrLn "ESCAPEES"
+  print (fieldEscapees fld)
+
+  putStrLn (replicate 20 '-')
+  putStrLn "rtree"
+  draw (displayRTree names bb tree)
+  traverse_ print (treeResult bb tree)
+    where
+      draw = mapM_ (putStrLn . ('|' : ))
 
 run :: String -> IO ()
 run inputData = do
@@ -347,12 +429,12 @@ run inputData = do
         Just (c,n) -> do putStrLn $ show c ++ ": " ++ show n
     doFloodFill cs = do
       hline "FLOOD FILL: "
-      case floodFill cs >>= currentBiggestFiniteEmpire of
+      case floodFill cs >>= fieldResult of
         Nothing -> putStrLn "Could not perform flood fill"
-        Just (coord, s) -> putStrLn $ show coord ++ ": " ++ show (S.size s)
+        Just (coord, s) -> putStrLn $ show coord ++ ": " ++ show s
     doRTree bb tree = do
       hline "RTree"
-      case biggestFiniteEmpire bb tree of
+      case treeResult bb tree of
         Nothing -> putStrLn "Could use RTree"
         Just (c,n) -> do
           putStrLn $ show c ++ ": " ++ show n
