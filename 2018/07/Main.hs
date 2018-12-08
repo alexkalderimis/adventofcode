@@ -2,10 +2,11 @@ import qualified Data.OrdPSQ as PSQ
 import Data.Semigroup
 import Control.Monad.State.Strict as State
 import qualified Data.Map.Strict as M
-import           Data.Foldable (foldl,toList)
+import           Data.Foldable (foldl', foldl,toList)
 import qualified Data.Set as S
 import Data.Maybe
 import Control.Applicative
+import qualified Debug.Trace as Debug
 
 type Node = Char -- technically can be any Ord, but this puzzle only requires chars
 type DependencyGraph = M.Map Node (S.Set Node)
@@ -13,7 +14,10 @@ type DependencyGraph = M.Map Node (S.Set Node)
 main :: IO ()
 main = do
   deps <- buildG . fmap parseDep . lines <$> getContents
+  putStrLn "Topological sort:"
   putStrLn (topologicalSort deps)
+  putStrLn "Parallel execution:"
+  print (parallelWork 60 5 deps)
 
 -- simplistic parsing, because we only have to deal with good input
 parseDep :: String -> (Node,Node)
@@ -23,6 +27,58 @@ parseDep s = let (a:rst) = drop prelude s
   where
     prelude = length ("Step " :: String)
     middle = length (" must be finished before step " :: String)
+
+stepCost :: Int -> Node -> Int
+stepCost k n = k + (fromEnum n - fromEnum 'A') + 1
+
+data Elf = Idle
+         | Working Int Node
+         deriving (Show)
+
+parallelWork :: Int -> Int -> DependencyGraph -> (Int, [Node])
+parallelWork k elves dg
+  = tick dg (getWorkers mempty (elves + 1) (takeUnblocked dg)) 0 []
+  where
+    getWorkers processing capacity jobs =
+      let accepted = filter (flip S.notMember processing) $ take capacity jobs
+          ws = startWork k <$> accepted
+          unemployed = replicate (capacity - length accepted) Idle
+       in ws <> unemployed
+    tick g workers timeElapsed res =
+      let (ns, idle, working) = runWorkers workers
+          t = succ timeElapsed
+          r = res ++ ns
+          g' = foldr M.delete g ns
+          released = if M.null g' then terminals g else []
+       in case (idle, takeUnblocked g' <> released) of
+         (n, [])    -> if null working
+                       then (t, r) -- nothing to do, nothing happening, we are done
+                       else tick g' (replicate n Idle <> working) t r
+         (0, _)     -> tick g' working t r -- every resource is busy
+         (cap,jobs) -> -- allocate idle resources, then continue
+           let processing = S.fromList [x | Working _ x <- working]
+            in tick g' (working <> getWorkers processing cap jobs) t r
+
+startWork :: Int -> Node -> Elf
+startWork k n = Working (stepCost k n - 1) n
+
+runWorkers :: [Elf] -> ([Node], Int, [Elf])
+runWorkers = foldl' go ([], 0, [])
+  where
+    go (ns, n, acc) elf = case elf of
+      Idle        -> (ns,   n + 1, acc)
+      Working 0 x -> (x:ns, n + 1, acc)
+      Working t x -> (ns,   n,     Working (t - 1) x : acc)
+
+takeUnblocked :: DependencyGraph -> [Node]
+takeUnblocked g = filter (not . blocked)
+                $ topologicalSort g
+  where
+    waiters = waiting g
+    blocked n = S.member n waiters
+
+terminals :: DependencyGraph -> [Node]
+terminals = takeUnblocked . revG
 
 topologicalSort :: DependencyGraph -> [Node]
 topologicalSort dg = State.evalState go initState
