@@ -1,4 +1,5 @@
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE TupleSections #-}
 
 import qualified Data.OrdPSQ as PSQ
 import Data.Semigroup
@@ -9,7 +10,6 @@ import qualified Data.Set as S
 import qualified Data.List as L
 import Data.Maybe
 import Control.Applicative
-import qualified Debug.Trace as Debug
 
 type Node = Char -- technically can be any Ord, but this puzzle only requires chars
 type DependencyGraph = M.Map Node (S.Set Node)
@@ -21,7 +21,6 @@ main = do
   putStrLn (topologicalSort deps)
   putStrLn "Parallel execution:"
   print (parallelWork 60 4 deps)
-  print (parallelWork2 60 4 deps)
 
 -- simplistic parsing, because we only have to deal with good input
 parseDep :: String -> (Node,Node)
@@ -35,113 +34,67 @@ parseDep s = let (a:rst) = drop prelude s
 stepCost :: Int -> Node -> Int
 stepCost k n = k + (fromEnum n - fromEnum 'A') + 1
 
-data Elf = Idle
-         | Working Int Node
-         deriving (Show)
-
 data PState = PState
   { sBlocking :: DependencyGraph
   , sAvailable :: [Node]
   , sComplete :: [Node]
-  , sElapsed :: Int
   , sWorkers :: [(Int, Node)]
   , sCapacity :: Int
   } deriving Show
 
-parallelWork2 :: Int -> Int -> DependencyGraph -> (Int, [Node])
-parallelWork2 k elves dg = State.evalState tick initState
+parallelWork :: Int -> Int -> DependencyGraph -> (Int, [Node])
+parallelWork k elves dg = State.evalState (tick 0) PState { sBlocking = dg
+                                                          , sAvailable = takeUnblocked dg
+                                                          , sComplete = mempty
+                                                          , sWorkers = []
+                                                          , sCapacity = elves + 1
+                                                          }
   where
-    tick = do
-      s <- State.get
-      Debug.traceShow (sElapsed s, sWorkers s) $ return ()
-      reapDone
-      allocateIdle
-      jumpAhead
-    jumpAhead = do
-      ws <- State.gets sWorkers
-      if null ws
-        then State.gets      $ \s -> (sElapsed s, sComplete s)
-        else do State.modify $ \s -> s { sElapsed = nextTick ws }
-                tick
-    getWorkers now ignore capacity jobs =
-      [(completesAt now n, n) | n <- take capacity jobs
-                              , S.notMember n ignore
-                              ]
-    completesAt now n = now + stepCost k n
-    initState = PState { sBlocking = dg
-                       , sAvailable = takeUnblocked dg
-                       , sComplete = mempty
-                       , sWorkers = []
-                       , sElapsed = 0
-                       , sCapacity = elves + 1
-                       }
-    nextTick = minimum . fmap fst
-    reapDone = do
-      t <- State.gets sElapsed
+    tick time = do
+      reapDone time
+      allocateIdle time
+      mt <- State.gets nextJump 
+      case mt of
+        Nothing -> State.gets ((time,) . sComplete)
+        Just t -> tick t
+ 
+    reapDone t = do
       ws <- State.gets sWorkers
       let completed = fmap snd $ filter ((<= t) . fst) ws
-      markCompleted completed
-    markCompleted ns = State.modify $ \s ->
-      let g = foldr M.delete (sBlocking s) ns
-          rg = revG g
-       in s { sBlocking = g
-            , sAvailable = L.sort $ mconcat [ sAvailable s
-                                            , ns >>= \n -> filter (not . flip M.member rg)
-                                                           . maybe mempty S.toList
-                                                           $ M.lookup n (sBlocking s)
-                                            ]
-            , sComplete = sComplete s <> ns
-            , sWorkers = filter (not . (`elem` ns) . snd) (sWorkers s)
-            }
-    allocateIdle = do
+      State.modify (markCompleted completed)
+
+    allocateIdle now = do
       s <- State.get
       let 
-          pending = length $ sWorkers s
-          idle    = Debug.traceShowId $ subtract pending $ sCapacity s
-          jobs    = Debug.traceShowId $ sAvailable s
+          pending = length           $ sWorkers s
+          idle    = subtract pending $ sCapacity s
           ignore = S.fromList (sComplete s) <> S.fromList (snd <$> sWorkers s)
-          ws = getWorkers (sElapsed s) ignore idle jobs
+          ws = getWorkers k now ignore idle (sAvailable s)
       State.put $ s { sWorkers = ws <> sWorkers s
                     , sAvailable = drop (length ws) (sAvailable s)
                     }
 
-parallelWork :: Int -> Int -> DependencyGraph -> (Int, [Node])
-parallelWork k elves dg
-  = let (ws,ps) = getWorkers mempty (elves + 1) (takeUnblocked dg)
-     in tick dg ps ws 0 []
-  where
-    getWorkers processing capacity jobs =
-      let accepted   = filter (flip S.notMember processing) $ take capacity jobs
-          ws         = startWork k <$> accepted
-          unemployed = replicate (capacity - length accepted) Idle
-       in (ws <> unemployed, S.fromList accepted)
-    tick g processing workers timeElapsed res =
-      let (complete, idle, working) = Debug.traceShow (timeElapsed, workers) $ runWorkers workers
-          t        = succ timeElapsed
-          r        = res ++ complete
-          g'       = foldr M.delete g complete
-          available = if M.null g' then terminals g else takeUnblocked g'
-          processing' = foldr S.delete processing complete
-       in case (idle, available) of
-         (n, [])    -> if null working
-                       then (t, r) -- nothing to do, nothing happening, we are done
-                       else tick g' processing' (replicate n Idle <> working) t r
-         (0, _)     -> tick g' processing' working t r -- every resource is busy
-         (cap,jobs) -> -- allocate idle resources, then continue
-           let (ws,ps) = getWorkers processing' cap jobs
-            in tick g' (processing <> ps) (working <> ws) t r
+markCompleted ns s =
+  let g = foldr M.delete (sBlocking s) ns
+      stillBlocked = M.keysSet $ revG g
+      ws = filter (not . (`elem` ns) . snd) (sWorkers s)
+      newlyAvailable = do
+        n        <- ns
+        unlocked <- maybe mempty S.toList $ M.lookup n (sBlocking s)
+        guard (S.notMember unlocked stillBlocked)
+        return unlocked
+   in s { sBlocking  = g
+        , sAvailable = L.sort (sAvailable s <> newlyAvailable)
+        , sComplete  = sComplete s <> ns
+        , sWorkers   = ws
+        }
 
-startWork :: Int -> Node -> Elf
-startWork k n = Working (stepCost k n - 1) n
+nextJump s = case sWorkers s of
+  [] -> Nothing
+  ws -> Just $ minimum (fst <$> ws)
 
-runWorkers :: [Elf] -> ([Node], Int, [Elf])
-runWorkers = foldl' go ([], 0, [])
-  where
-    go (ns, n, acc) elf = case elf of
-      Idle        -> (ns,   n + 1, acc)
-      Working 0 x -> (x:ns, n + 1, acc)
-      Working t x -> (ns,   n,     Working (t - 1) x : acc)
-
+getWorkers k now ignore capacity jobs =
+  [ (now + stepCost k n, n) | n <- take capacity jobs , S.notMember n ignore ]
 
 takeUnblocked :: DependencyGraph -> [Node]
 takeUnblocked g = filter (not . blocked)
@@ -149,9 +102,6 @@ takeUnblocked g = filter (not . blocked)
   where
     waiters = waiting g
     blocked n = S.member n waiters
-
-terminals :: DependencyGraph -> [Node]
-terminals = takeUnblocked . revG
 
 topologicalSort :: DependencyGraph -> [Node]
 topologicalSort dg = State.evalState go initState
@@ -189,9 +139,6 @@ revG = M.fromListWith (<>)
 
 waiting :: DependencyGraph -> S.Set Node
 waiting = mconcat . M.elems
-
-allNodes :: DependencyGraph -> S.Set Node
-allNodes g = waiting g <> M.keysSet g
 
 buildG :: [(Node,Node)] -> DependencyGraph
 buildG = M.fromListWith (<>) . fmap (fmap S.singleton)
@@ -242,10 +189,9 @@ exampleSerial = [('A', 'B'), ('B', 'C'), ('C', 'D'), ('D', 'E')]
 -- 3        E         D        F          AC
 -- 4        E         D        F          AC
 -- 5        E         D        F          AC
--- 6        .         D        F          ACE
--- 7        .         .        B          ACEF
--- 8        .         .        B          ACEF
--- 9        .         .        .          ACEFB
+-- 6        .         D        B          ACEF
+-- 7        .         .        B          ACEFD
+-- 8        .         .        .          ACEFDB
 exampleParallel :: [(Node, Node)]
 exampleParallel = [('A', 'E')
                   ,('C', 'D')
