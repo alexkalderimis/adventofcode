@@ -39,6 +39,10 @@ executables:
     - array
     - containers
     - time
+    - mtl
+    - parsers
+    - hspec
+    - vector
 
 tests:
   adventofcode-test:
