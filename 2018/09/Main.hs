@@ -1,66 +1,123 @@
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE FlexibleContexts #-}
 
+-- This exercise is all about efficiency, as being able
+-- to return answers quickly is only possible with efficient
+-- representations.
+--
+-- The most efficient representation for this exercise is a
+-- circular linked list. The closest thing we can get in 
+-- Haskell while maintaining a persistent data structure
+-- is a list-zipper.
 import System.Environment (withArgs, getArgs)
 
 import Test.Hspec
 import Control.Monad
 import Text.Printf
 import Data.Foldable
-import qualified Data.IntMap as M
+import qualified Data.Vector.Unboxed as V
+import qualified Data.Time.Clock as Clock
+
+import Data.Array.ST
+import Control.Monad.ST
+import qualified Data.Array as A
 
 type Marble = Int
-data Circle = Circle { marbles :: ![Int], currentIndex :: !Int }
-  deriving (Show, Eq)
 
-data GameState = GS { gameScores :: !(M.IntMap Int)
-                    , gameCircle :: !Circle
-                    } deriving (Show)
+-- A circle has at least one element (the focus), and 
+-- a reversed stack to the left, and a stack to the right.
+data Circle = Circle
+  { lStack :: ![Marble]
+  , rStack :: ![Marble]
+  , focus   :: !Marble
+  } deriving (Show, Eq)
+
+marbles :: Circle -> [Marble]
+marbles c = reverse (lStack c) ++ focus c : rStack c
 
 main :: IO ()
 main = do
   args <- getArgs
   case args of
     ["test"] -> withArgs [] (hspec spec)
-    ["pt1"]  -> print (highScore 465 71940)
+    ["pt1"]  -> time (print (highScore 465 71940))
     ["pt2"]  -> print (highScore 465 (71940 * 100))
     _        -> putStrLn "missing argument: test, pt1, pt2"
+  where
+    time act = do
+      start <- Clock.getCurrentTime
+      act
+      end <- Clock.getCurrentTime
+      print (Clock.diffUTCTime end start)
 
 currentMarble :: Circle -> Int
-currentMarble c = marbles c !! currentIndex c
+currentMarble = focus
 
 place :: Int -> Circle -> (Int, Circle)
--- rule two, scoring plays when marble is mod 23
-place m (Circle ms i) | m `mod` 23 == 0 =
-  let remIx = (i - 7) `mod` (length ms)
-      taken = ms !! remIx
-      (pref, suff) = splitAt remIx ms
-   in (m + taken, Circle (pref ++ drop 1 suff) remIx)
--- rule one, default placement rule
-place m (Circle ms i) =
-  let j = (i + 2) `mod` length ms
-      circle = case j of
-                 0 -> Circle (ms ++ [m]) (length ms)
-                 _ -> let (pref,suff) = splitAt j  ms
-                       in Circle (pref ++ m : suff) j
-   in (0, circle)
+place m c | m `mod` 23 == 0 =
+  let (Circle l r taken) = rotLeft 7 c
+      (f, l',r') = case (l,r) of
+                     ([], []) -> error "Cannot splice"
+                     (_, (x:xs)) -> (x, l, xs)
+                     (ls, []) -> let (x:xs) = reverse ls in (x, [], xs)
+   in (m + taken, Circle l' r' f)
+
+place m c =
+  let (Circle l r foc) = rotRight 1 c
+   in (0, Circle (foc:l) r m)
+
+showCircle :: Circle -> String
+showCircle (Circle ls rs foc) =
+  unwords $ concat [fmap show (reverse ls)
+                   ,["(" ++ show foc ++ ")"]
+                   ,fmap show rs
+                   ]
 
 initCircle :: Circle
-initCircle = Circle [0] 0
+initCircle = Circle [] [] 0
 
--- infinite list used to initialise games
-players :: [(Int, Int)]
-players = zip [0 ..] (repeat 0)
+rotRight :: Int -> Circle -> Circle
+rotRight 0 c = c
+rotRight n (Circle [] [] foc) = Circle [] [] foc
+rotRight n (Circle ls rs foc) =
+  let ls'      = foc : ls
+      rotated  = case rs of (x:xs) -> Circle ls' xs x
+                            [] -> let (x:xs) = reverse ls'
+                                  in Circle [] xs x
+   in rotRight (n - 1) rotated
+
+rotLeft :: Int -> Circle -> Circle
+rotLeft 0 c = c
+rotLeft n (Circle [] [] foc) = Circle [] [] foc
+rotLeft n (Circle ls rs foc) =
+  let rs'      = foc : rs
+      rotated  = case ls of (x:xs) -> Circle xs rs' x
+                            [] -> let (x:xs) = reverse rs'
+                                  in Circle xs [] x
+   in rotLeft (n - 1) rotated
+
+lengthAt :: Marble -> Int
+lengthAt 0 = 1
+lengthAt n = lengthAt 0 + n - (2 * (n `div` 23))
 
 highScore :: Int -> Int -> Int
 highScore numPlayers lastMarble = do
-  let -- scores = M.fromList $ take numPlayers players
-      ms = [1 .. lastMarble]
-      initState = ((0,0), initCircle)
-      finalScores = M.fromListWith (+)
+  let 
+      ms          = [1 .. lastMarble]
+      initState   = ((0,0), initCircle)
+      finalScores = buildScores
                   $ fmap fst
                   $ scanl step initState ms
-   in maximum $ M.elems finalScores
+   in maximum $ A.elems finalScores
   where
+    buildScores scores = runST $ do
+      a <- newArray (0, numPlayers - 1) 0
+      mapM_ (addScore a) scores
+      freeze a
+    addScore :: STUArray s Int Int -> (Int, Int) -> ST s ()
+    addScore a (k,v) = do
+      curr <- readArray a k
+      writeArray a k (curr + v)
     step (_, c) m =
       let player = m `mod` numPlayers
           ~(score, c') = place m c
@@ -117,29 +174,27 @@ spec = do
           highScore players lm `shouldBe` hs
   describe "placing the next marble" $ do
     describe "into the initial game state" $ do
+      let (_, c) = place 1 initCircle
       it "is the same as appending" $ do
-        place 1 initCircle `shouldBe` (0, Circle [0,1] 1)
+        marbles c `shouldBe` [0, 1] 
+      it "has the current marble as the focus" $ do
+        focus c `shouldBe` 1
     describe "into step 1" $ do
+      let c = snd $ foldl (\(_,c) m -> place m c) (0, initCircle) [1,2]
       it "inserts between the two current values" $ do
-        let c = (Circle [0,1] 1)
-        place 2 c `shouldBe` (0, Circle [0,2,1] 1)
-    describe "into step 2" $ do
-      it "appends onto end" $ do
-        let c = (Circle [0,2,1] 1)
-        place 3 c `shouldBe` (0, Circle [0,2,1,3] 3)
+        marbles c `shouldBe` [0,2,1] 
+  describe "lengthAt" $ do
+    it "should correctly calculate the length at each game state" $ do
+    let play (_, c) m = place m c
+        game = scanl play (0, initCircle) [1 .. 25]
+        lengths = fmap (length . marbles . snd) game
+    fmap lengthAt [0 .. 25] `shouldBe` lengths
   describe "the example game" $ do
     let play (_, c) m = place m c
         game = scanl play (0, initCircle) [1 .. 25]
         endState = last game
     it "should end up with a circle of 23 marbles" $ do
       length (marbles $ snd endState) `shouldBe` 24
-    it "should play as expected" $ do
-      let expected = [ 0, 1,   1,  3,  1,  3, 5, 7, 1, 3, 5
-                     , 7,   9, 11, 13, 15, 1, 3, 5, 7, 9
-                     , 11, 13,  6,  8, 10
-                     ]
-      fmap (currentIndex . snd) game `shouldBe` expected
     it "should include one scoring move" $ do
       let scores = filter (> 0) $ fmap fst game
       scores `shouldBe` [32]
-      
