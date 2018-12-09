@@ -1,14 +1,16 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE FlexibleContexts #-}
 
--- This exercise is all about efficiency, as being able
--- to return answers quickly is only possible with efficient
--- representations.
+-- This exercise is all about efficiency, as being able to return answers
+-- quickly is only possible with efficient representations.
 --
--- The most efficient representation for this exercise is a
--- circular linked list. The closest thing we can get in 
--- Haskell while maintaining a persistent data structure
--- is a list-zipper.
+-- The most efficient representation for this exercise is a circular linked
+-- list. The closest thing we can get in Haskell while maintaining a persistent
+-- data structure is a list-zipper.
+--
+-- Note that while the instructions talk a lot about indices, they are not
+-- needed at all to represent the solution, so they are not present here at all
+
 import System.Environment (withArgs, getArgs)
 
 import Test.Hspec
@@ -40,8 +42,8 @@ main = do
   args <- getArgs
   case args of
     ["test"] -> withArgs [] (hspec spec)
-    ["pt1"]  -> time (print (highScore 465 71940))
-    ["pt2"]  -> print (highScore 465 (71940 * 100))
+    ["pt1"]  -> time $ print (highScore 465 71940)
+    ["pt2"]  -> time $ print (highScore 465 (71940 * 100))
     _        -> putStrLn "missing argument: test, pt1, pt2"
   where
     time act = do
@@ -54,17 +56,11 @@ currentMarble :: Circle -> Int
 currentMarble = focus
 
 place :: Int -> Circle -> (Int, Circle)
-place m c | m `mod` 23 == 0 =
-  let (Circle l r taken) = rotLeft 7 c
-      (f, l',r') = case (l,r) of
-                     ([], []) -> error "Cannot splice"
-                     (_, (x:xs)) -> (x, l, xs)
-                     (ls, []) -> let (x:xs) = reverse ls in (x, [], xs)
-   in (m + taken, Circle l' r' f)
-
-place m c =
-  let (Circle l r foc) = rotRight 1 c
-   in (0, Circle (foc:l) r m)
+place m c
+  | m `mod` 23 == 0 = let (taken, circle) = pop (rotLeft 7 c)
+                       in (m + taken, circle)
+  | otherwise       = let (Circle l r foc) = rotRight 1 c
+                       in (0, Circle (foc:l) r m)
 
 showCircle :: Circle -> String
 showCircle (Circle ls rs foc) =
@@ -76,6 +72,8 @@ showCircle (Circle ls rs foc) =
 initCircle :: Circle
 initCircle = Circle [] [] 0
 
+-- Circle navigation functions:
+-- rotating left and right, and popping the current element
 rotRight :: Int -> Circle -> Circle
 rotRight 0 c = c
 rotRight n (Circle [] [] foc) = Circle [] [] foc
@@ -96,10 +94,24 @@ rotLeft n (Circle ls rs foc) =
                                   in Circle xs [] x
    in rotLeft (n - 1) rotated
 
+{-# INLINE pop #-}
+pop :: Circle -> (Marble, Circle)
+pop (Circle [] [] _) = error "Cannot pop singleton circle"
+pop (Circle ls rs foc) = 
+  let circle = case rs of
+                 (x:xs) -> Circle ls xs x
+                 [] -> let (x:xs) = reverse ls in Circle [] xs x
+   in (foc, circle)
+
+-- a relic of an attempt to calculate the answer. Completely
+-- hopeless, but left in here as a high level check
 lengthAt :: Marble -> Int
 lengthAt 0 = 1
 lengthAt n = lengthAt 0 + n - (2 * (n `div` 23))
 
+-- Place the marbles, calculate the scores, and then
+-- use an unpacked ST array to find the highest (this
+-- is a small optimisation, but a significant one)
 highScore :: Int -> Int -> Int
 highScore numPlayers lastMarble = do
   let 
