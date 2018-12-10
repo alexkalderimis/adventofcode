@@ -1,3 +1,6 @@
+{-# LANGUAGE BangPatterns #-}
+
+import Control.Monad
 import Test.Hspec
 import System.Environment (withArgs, getArgs)
 import qualified Data.Time.Clock as Clock
@@ -5,21 +8,24 @@ import qualified Data.List as L
 import Data.Semigroup
 import Data.Foldable
 import qualified Data.Set as S
+
 import qualified Data.List.NonEmpty as NE
 import           Data.List.NonEmpty (NonEmpty)
 
-data Point = Point { px :: Int, py :: Int }
+data Point = Point { px :: !Int, py :: !Int }
   deriving (Show, Eq, Ord)
 
-data Velocity = Velocity { dx :: Int, dy :: Int }
+data Velocity = Velocity { dx :: !Int, dy :: !Int }
   deriving (Show, Eq)
 
-type Sky = NonEmpty Point
+-- tested this with NonEmpty and Vector. NE was nicer, and faster in places.
+type Coll = NonEmpty
+type Sky = Coll Point
 
 data Bounds = Bounds
-  { boundsOrigin :: Point
-  , boundsWidth :: Int
-  , boundsHeight :: Int
+  { boundsOrigin :: !Point
+  , boundsWidth :: !Int
+  , boundsHeight :: !Int
   } deriving (Show, Eq)
 
 instance Semigroup Bounds where
@@ -36,6 +42,10 @@ instance Semigroup Bounds where
           w = boundsWidth
           h = boundsHeight
 
+area :: Bounds -> Int
+area bs = boundsHeight bs * boundsWidth bs
+
+-- skies are never empty
 bounds :: Sky -> Bounds
 bounds = foldl1 (<>) . fmap bound
   where bound p = Bounds p 1 1
@@ -59,40 +69,35 @@ parsePair ('<' : s) =
    in (read xstr, read ystr)
 parsePair s = error ("parsePair: " ++ s)
 
-tick :: NonEmpty Velocity -> Sky -> Sky
+tick :: Coll Velocity -> Sky -> Sky
 tick vels = NE.zipWith move vels
   where move (Velocity dx dy) (Point px py) = Point (px + dx)
                                                     (py + dy)
 
-getMessage :: [String] -> Maybe Sky
+getMessage :: [String] -> Maybe (Int, Sky)
 getMessage strs = do
-  pvs <- NE.nonEmpty $ fmap parsePoint strs
-  let s0  = fmap fst pvs
-      sky = localMinimum (fmap withBounds $ NE.toList $ skies pvs)
+  pvs <- fmap parsePoint <$> NE.nonEmpty strs
+  let sky = localMinimum . fmap withBounds $ zip [1 ..] (skies pvs)
   return sky
   where
-    withBounds sky = (sky, bounds sky)
+    withBounds (i, sky) = (i, sky, bounds sky)
     localMinimum ss = case take 2 ss of
-      [(s0,b0), (s1,b1)] | area b0 < area b1 -> s0
+      [(i,s0,b0), (_,_,b1)] | area b0 < area b1 -> (i, s0)
       _  -> localMinimum (drop 1 ss)
 
-area :: Bounds -> Int
-area bs = boundsHeight bs * boundsWidth bs
-
+-- for interactively looking at a sequence of skies
 play :: Int -> [String] -> IO ()
-play n strs = do
-  let pvs = parsePoint <$> NE.fromList strs
-  mapM_ printFrame (NE.take n $ skies pvs)
+play n = mapM_ printFrame . take n . skies . fmap parsePoint . NE.fromList
   where
     printFrame sky = do
       putStrLn $ "AREA: " ++ show (area $ bounds sky)
       printSky sky
 
-skies :: NonEmpty (Point, Velocity) -> NonEmpty Sky
-skies pvs = NE.unfoldr (k (tick vs)) s0
+skies :: Coll (Point, Velocity) -> [Sky]
+skies pvs = L.unfoldr (k (tick vs)) s0
   where
     (s0, vs) = NE.unzip pvs
-    k f a = let b = f a in (b, Just b)
+    k f a = let b = f a in Just (b,b)
 
 drawSky :: Sky -> [String]
 drawSky sky = fmap row $ take (boundsHeight bs) [0 ..]
@@ -156,12 +161,12 @@ main = do
   args <- getArgs
   case args of
     ["test"] -> withArgs [] (hspec spec)
-    ["pt1"]  -> do strs <- lines <$> getContents
+    ["run"]  -> do strs <- lines <$> getContents
                    time $ case getMessage strs of
-                            Just sky -> printSky sky
+                            Just (i, sky) -> do printSky sky
+                                                putStrLn $ show i ++ " steps"
                             Nothing -> putStrLn "NO MESSAGE"
-    ["pt2"]  -> error "not implemented"
-    _        -> putStrLn "missing argument: test, pt1, pt2"
+    _        -> putStrLn "missing argument: test, run"
   where
     time act = do
       start <- Clock.getCurrentTime
@@ -181,8 +186,11 @@ spec = do
               , "#...#...#."
               , "#...#..###"
               ]
+        ans = getMessage examplePoints
     it "should descern the message" $ do
-      fmap drawSky (getMessage examplePoints) `shouldBe` Just msg
+      fmap (drawSky.snd) ans `shouldBe` Just msg
+    it "should know how long it took" $ do
+      fmap fst ans `shouldBe` Just 3
   describe "drawSky" $ do
     let diamondSky =
           ["position=< 0,  0> velocity=< 0,  2>"
@@ -194,7 +202,7 @@ spec = do
           ]
     it "should draw the sky correctly" $ do
       let sky = NE.fromList . fmap (fst . parsePoint)
-                            $ diamondSky
+                           $ diamondSky
           expected = [ ".....#....."
                      , "..........."
                      , "..........."
@@ -227,8 +235,8 @@ spec = do
   describe "bounds" $ do
     it "should get correct bounds from a small sky" $ do
       let sky = NE.fromList [Point 0 0
-                            ,Point 5 5
-                            ,Point 20 10
-                            ]
+                           ,Point 5 5
+                           ,Point 20 10
+                           ]
       bounds sky `shouldBe` (Bounds (Point 0 0) 21 11)
 
