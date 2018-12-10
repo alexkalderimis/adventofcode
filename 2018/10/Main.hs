@@ -1,16 +1,17 @@
 {-# LANGUAGE BangPatterns #-}
 
 import Control.Monad
-import Test.Hspec
-import System.Environment (withArgs, getArgs)
-import qualified Data.Time.Clock as Clock
-import qualified Data.List as L
 import Data.Semigroup
 import Data.Foldable
+import System.Environment (withArgs, getArgs)
+import qualified Data.List as L
 import qualified Data.Set as S
+import qualified Data.Time.Clock as Clock
 
 import qualified Data.List.NonEmpty as NE
 import           Data.List.NonEmpty (NonEmpty)
+
+import Test.Hspec
 
 data Point = Point { px :: !Int, py :: !Int }
   deriving (Show, Eq, Ord)
@@ -42,6 +43,27 @@ instance Semigroup Bounds where
           w = boundsWidth
           h = boundsHeight
 
+-- Print message and number of steps taken
+main :: IO ()
+main = do
+  args <- getArgs
+  case args of
+    ["test"] -> withArgs [] (hspec spec)
+    ["run"]  -> do strs <- lines <$> getContents
+                   time $ case getMessage strs of
+                            Just (i, sky) -> do printSky sky
+                                                putStrLn $ show i ++ " steps"
+                            Nothing -> putStrLn "NO MESSAGE"
+    _        -> putStrLn "missing argument: test, run"
+  where
+    time act = do
+      start <- Clock.getCurrentTime
+      act
+      end <- Clock.getCurrentTime
+      print (Clock.diffUTCTime end start)
+
+-------------------
+
 area :: Bounds -> Int
 area bs = boundsHeight bs * boundsWidth bs
 
@@ -70,7 +92,7 @@ parsePair ('<' : s) =
 parsePair s = error ("parsePair: " ++ s)
 
 tick :: Coll Velocity -> Sky -> Sky
-tick vels = NE.zipWith move vels
+tick = NE.zipWith move
   where move (Velocity dx dy) (Point px py) = Point (px + dx)
                                                     (py + dy)
 
@@ -93,6 +115,7 @@ play n = mapM_ printFrame . take n . skies . fmap parsePoint . NE.fromList
       putStrLn $ "AREA: " ++ show (area $ bounds sky)
       printSky sky
 
+-- infinite list of skies
 skies :: Coll (Point, Velocity) -> [Sky]
 skies pvs = L.unfoldr (k (tick vs)) s0
   where
@@ -100,15 +123,15 @@ skies pvs = L.unfoldr (k (tick vs)) s0
     k f a = let b = f a in Just (b,b)
 
 drawSky :: Sky -> [String]
-drawSky sky = fmap row $ take (boundsHeight bs) [0 ..]
+drawSky sky = row <$> take (boundsHeight bs) [0 ..]
   where
+    row  y   = cell y <$> take (boundsWidth bs) [0 ..]
+    cell y x = if S.member (Point x y) stars then '#' else '.' 
     bs = bounds sky
+    origin = boundsOrigin bs
     -- translate points to a (0,0) origin sky
-    translate (Point x y) = let o = boundsOrigin bs
-                             in Point (x - px o) (y - py o)
+    translate (Point x y) = Point (x - px origin) (y - py origin)
     stars = foldr S.insert mempty (fmap translate sky)
-    row i = fmap (cell i) $ take (boundsWidth bs) [0 ..]
-    cell i j = if S.member (Point j i) stars then '#' else '.' 
 
 printSky :: Sky -> IO ()
 printSky = mapM_ putStrLn . drawSky
@@ -155,24 +178,6 @@ examplePoints =
   ,"position=<14,  7> velocity=<-2,  0>"
   ,"position=<-3,  6> velocity=< 2, -1>"
   ]
-
-main :: IO ()
-main = do
-  args <- getArgs
-  case args of
-    ["test"] -> withArgs [] (hspec spec)
-    ["run"]  -> do strs <- lines <$> getContents
-                   time $ case getMessage strs of
-                            Just (i, sky) -> do printSky sky
-                                                putStrLn $ show i ++ " steps"
-                            Nothing -> putStrLn "NO MESSAGE"
-    _        -> putStrLn "missing argument: test, run"
-  where
-    time act = do
-      start <- Clock.getCurrentTime
-      act
-      end <- Clock.getCurrentTime
-      print (Clock.diffUTCTime end start)
 
 spec :: Spec
 spec = do
