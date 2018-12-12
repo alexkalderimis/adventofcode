@@ -3,7 +3,7 @@ import Control.Exception (evaluate)
 import Control.Concurrent.Async (async)
 import Control.Monad
 import Data.Int
-import Data.List (maximumBy)
+import Data.List (mapAccumL, maximumBy)
 import Data.Ord
 import System.Environment (withArgs, getArgs)
 import System.Exit
@@ -44,7 +44,7 @@ type Total = Int
 
 -- doing the naive thing (max [selectMaxSquare i cells | i <- [1 .. 300]]) is
 -- extremely expensive, taking over 10 minutes to complete. This solution
--- completes in about 25sec.
+-- completes in about 11sec.
 --
 -- The key optimisation is recognising that the sums of smaller stages can be
 -- reused for the larger sizes. So as we proceed, we memoize the previous
@@ -67,20 +67,22 @@ type Total = Int
 -- the previous state).
 partTwo :: FuelCells -> (Size, (Coord, Total))
 partTwo cells = maximumBy (comparing (snd.snd))
-              . fmap snd
-              $ scanl go (ret 1 cells) [2 .. 300]
+              . snd
+              $ mapAccumL go cells [1 .. 300]
   where
-    ret n a = (a, (n, maxAssoc a))
-    go (a, _) n =
-      let bds = fmap (translate (-1,-1)) $ A.bounds a
-          a' = A.array bds $ fmap (\ix -> (ix, oneBigger n a ix)) (A.range bds)
-       in ret n a'
-    oneBigger :: Int -> FuelCells -> Coord -> Int
-    oneBigger size a coord = {- Debug.traceShow (size, coord) $ -} sum
-       [ a A.! coord
-       , gridTotal cells (translate (size - 1, 0) coord, translate (size - 1, size - 1) coord)
-       , gridTotal cells (translate (0, size - 1) coord, translate (size - 2, size - 1) coord)
-       ]
+    go a 1 = (a, ret 1 cells) -- no translation/derivation required
+    go a n = let bds = fmap (translate (-1,-1)) $ A.bounds a
+                 a'  = A.array bds $ fmap (\ix -> (ix, oneBigger n a ix)) (A.range bds)
+              in (a', ret n a')
+
+    ret n a           = (n, maxAssoc a)
+    rhEdge os origin  = (translate (os, 0) origin, translate (os    , os) origin)
+    btmEdge os origin = (translate (0, os) origin, translate (os - 1, os) origin)
+    oneBigger size a coord = let offset = size - 1
+                              in sum [ (a :: FuelCells) A.! coord
+                                     , gridTotal cells (rhEdge offset coord)
+                                     , gridTotal cells (btmEdge offset coord)
+                                     ]
 
 maxAssoc :: FuelCells -> (Coord, FuelLevel)
 maxAssoc = maximumBy (comparing snd) . A.assocs 
@@ -157,6 +159,3 @@ spec = do
          in posi == (1000 * (posi `div` 1000)
                      + 100 * hundreds posi
                      + rem posi 100)
-
-
-
