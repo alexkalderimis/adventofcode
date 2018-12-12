@@ -22,7 +22,7 @@ import Text.Parser.Char
 import Text.ParserCombinators.ReadP (readP_to_S, ReadP)
 import qualified Data.Array.Unboxed as A
 
-data Zipper a = Zipper { ls :: [a], focus :: a, rs :: [a] }
+data Zipper a = Zipper { zOffset :: Int, ls :: [a], focus :: a, rs :: [a] }
   deriving (Eq, Show, Functor)
 
 data PlantRule = PlantRule { l1, l0, c, r0, r1, ret :: Bool }
@@ -35,7 +35,7 @@ instance Arbitrary PlantRule where
                         <*> arbitrary
 
 instance Arbitrary a => Arbitrary (Zipper a) where
-  arbitrary = Zipper <$> arbitrary <*> arbitrary <*> arbitrary
+  arbitrary = Zipper <$> arbitrary <*> arbitrary <*> arbitrary <*> arbitrary
 
 type Rule a b = Maybe a -> Maybe a -> Maybe a -> Maybe a -> Maybe a -> b
 
@@ -58,19 +58,41 @@ main = do
     showCycle inp = print (uncurry detectCycle inp)
     -- assumes there is a cycle - this is needed to complete pt 2
     assumingCycle (s, rules) n = do
-      let (_, step0, cycleLength, val0, stepSize) = detectCycle s rules
-          stepsRemaining = (n - step0) `div` cycleLength
-      print (val0 + stepSize * stepsRemaining)
+      let c = detectCycle s rules
+          stepsRemaining = (n - cycleStart c) `div` cycleLength c
+          nextStart = cycleStartVal c + cycleVal c * stepsRemaining
+      case (n - cycleStart c) `rem` (cycleLength c) of
+        0 -> print nextStart -- great, print and go
+        r -> do -- we need to fast-fwd to the end of the last cycle we can use
+                -- and then run the sim from there.
+                let gen = runRulesA rules r (fromCycle r c)
+                print (fingerprint $ fromPlantState gen)
     -- assumes there is no cycle
     getFingerPrint (s,rules) n = do
       let gen = runRulesA rules n (toPlantState s)
       print (fmap showPlant $ A.elems $ gen)
       print (fingerprint $ fromPlantState gen)
 
+-- get the PlantState after n cycles, starting from where this cycle begins
+fromCycle :: Int -> Cycle -> PlantState
+fromCycle n c = let (Just z) = runParser (fromNonEmpty . NE.fromList <$> some plantP)
+                                         (Text.unpack $ cycleKey c)
+                in toPlantState (z { zOffset = cycleOffset c + (n * cycleOffsetDX c) })
+
+data Cycle = Cycle
+  { cycleKey :: Text
+  , cycleStart :: Int
+  , cycleLength :: Int
+  , cycleStartVal :: Int
+  , cycleVal :: Int
+  , cycleOffset :: Int
+  , cycleOffsetDX :: Int
+  } deriving (Show)
+
 -- pt 2 requires using the fact that the rules build cycles that can be
 -- exploited to calculate ahead to the answer. This detects the first cycle
 -- we encounter.
-detectCycle :: Zipper Bool -> [PlantRule] -> (Text, Int, Int, Int, Int)
+detectCycle :: Zipper Bool -> [PlantRule] -> Cycle
 detectCycle s rules =
   let r = compileRules rules
       fp :: PlantState -> Int
@@ -80,9 +102,10 @@ detectCycle s rules =
       go m n s = let s' = stepPlantState r s
                      k = key s'
                   in case HM.lookup k m of
-                       Nothing -> go (HM.insert k (n, fp s') m) (n + 1) s'
-                       Just (step, f) -> (k, step, n - step, f, fp s' - f)
-  in go (HM.singleton (key init) (0, fp init)) 1 init
+                       Nothing -> go (HM.insert k (n, fp s', fst (A.bounds s')) m) (n + 1) s'
+                       Just (step, f, os) -> Cycle k step (n - step) f (fp s' - f)
+                                                   os (fst (A.bounds s') - os)
+  in go (HM.singleton (key init) (0, fp init, fst (A.bounds init))) 1 init
 
 inputP :: ReadP (Zipper Bool, [PlantRule])
 inputP = (,) <$> initialStateP <*> (newline >> newline >> sepBy1 ruleP newline)
@@ -143,20 +166,8 @@ stepPlantState r ps =
           
 
 fromPlantState :: PlantState -> Zipper Bool
-fromPlantState ps = let (Just z) = fromList (A.assocs ps)
-                     in fmap snd $ recentre z
-
--- recentering is expensive for states that are very far away from
--- the origin, so could be eliminated by having zippers carry around
--- a notion of an offset. This was not necessary for this exercise
--- however.
-recentre :: Zipper (Int, Bool) -> Zipper (Int, Bool)
-recentre z = case compare (fst $ focus z) 0 of
-  EQ -> z
-  GT -> recentre $ fromMaybe (Zipper [] (pred $ fst $ focus z, False) (focus z : rs z))
-                 $ left z
-  LT -> recentre $ fromMaybe (Zipper (focus z : ls z) (succ $ fst $ focus z, False) [])
-                 $ right z
+fromPlantState ps = let (Just z) = fromList (A.elems ps)
+                     in z { zOffset = fst (A.bounds ps) }
 
 toPlantState :: Zipper Bool -> PlantState
 toPlantState z = let xs = toList $ indexed z
@@ -165,18 +176,17 @@ toPlantState z = let xs = toList $ indexed z
                   in A.array (lb,ub) xs
 
 runRules :: [PlantRule] -> Zipper Bool -> [Zipper Bool]
-runRules rules = let r = compileRules rules
-                  in iterate (applyRule r . grow False)
+runRules rules = let r = compileRules rules in iterate (stepState r)
 
 buildPatterns :: [PlantRule] -> S.HashSet [Bool]
 buildPatterns rs = S.fromList [ [l1,l0,c,r0,r1] | (PlantRule l1 l0 c r0 r1 True) <- rs ]
 
 right :: Zipper a -> Maybe (Zipper a)
-right (Zipper lhs old (new:rhs)) = Just $ Zipper (old:lhs) new rhs
+right (Zipper os lhs old (new:rhs)) = Just $ Zipper (succ os) (old:lhs) new rhs
 right _ = Nothing
 
 left :: Zipper a -> Maybe (Zipper a)
-left (Zipper (new:lhs) old rhs) = Just $ Zipper lhs new (old:rhs)
+left (Zipper os (new:lhs) old rhs) = Just $ Zipper (pred os) lhs new (old:rhs)
 left _ = Nothing
 
 rewind :: Zipper a -> Zipper a
@@ -185,11 +195,11 @@ rewind z = case left z of
   Just lz -> rewind lz
 
 fromNonEmpty :: NonEmpty a -> Zipper a
-fromNonEmpty (a :| as) = Zipper [] a as
+fromNonEmpty (a :| as) = Zipper 0 [] a as
 
 fromList :: [a] -> Maybe (Zipper a)
 fromList [] = Nothing
-fromList (a:as) = Just $ Zipper [] a as
+fromList (a:as) = Just $ Zipper 0 [] a as
 
 toList :: Zipper a -> [a]
 toList z = reverse (ls z) ++ focus z : rs z
@@ -204,14 +214,10 @@ showRule r = fmap showPlant inputs ++ " => " ++ [showPlant (ret r)]
 showPlant :: Bool -> Char
 showPlant = bool '.' '#'
 
-instance Applicative Zipper where
-  pure a = Zipper [] a []
-  zf <*> za = Zipper (ls zf <*> ls za) (focus zf $ focus za) (rs zf <*> rs za)
-
 instance Comonad Zipper where
   extract = focus
   duplicate z = let shift dir = catMaybes . takeWhile isJust . tail . iterate (>>= dir) . Just
-                 in Zipper (shift left z) z (shift right z)
+                 in Zipper (zOffset z) (shift left z) z (shift right z)
 
 applyRule :: Rule a b -> Zipper a -> Zipper b
 applyRule r = extend (rule r)
@@ -222,15 +228,19 @@ stepState r = trim . applyRule r . grow False
 -- we could have infinite zippers, but growing them is
 -- slightly better as they stay showable.
 grow :: a -> Zipper a -> Zipper a
-grow a (Zipper ls c rs) = Zipper (ls ++ replicate 3 a) c (rs ++ replicate 3 a)
+grow a (Zipper os ls c rs) = Zipper os (ls ++ replicate 2 a) c (rs ++ replicate 2 a)
 
 -- remove the useless Falses, introduced by growing or created
 -- by rules eliminating ends.
 trim :: Zipper Bool -> Zipper Bool
-trim (Zipper ls c rs) = Zipper (dropWhileEnd not ls) c (dropWhileEnd not rs)
+trim (Zipper os ls c rs) = Zipper os (dropWhileEnd not ls) c (dropWhileEnd not rs)
 
 indexed :: Zipper a -> Zipper (Int, a)
-indexed (Zipper ls c rs) = Zipper (zip (iterate pred (-1)) ls) (0, c) (zip (iterate succ 1) rs)
+indexed (Zipper os ls c rs) =
+  Zipper os
+         (zip (iterate pred (os - 1)) ls)
+         (os, c)
+         (zip (iterate succ (os + 1)) rs)
 
 -- the zipper based rule evaluator.
 rule :: Rule a b -> Zipper a -> b
@@ -278,7 +288,8 @@ spec = do
       fmap (showRule . (!! 7) . snd) mInp `shouldBe` Just rule
   describe "State" $ do
     it "can parse and serialise correctly" $ property $ \z ->
-      runParser initialStateP ("initial state: " ++ showState z) `shouldBe` Just (rewind z)
+      let expected = (rewind z) { zOffset = 0 }
+       in runParser initialStateP ("initial state: " ++ showState z) `shouldBe` Just expected
   describe "PlantRule" $ do
     it "can parse and serialise correctly" $ do
       property $ \r -> runParser ruleP (showRule r) `shouldBe` Just r
@@ -309,9 +320,14 @@ spec = do
       fingerprint s `shouldBe` 325
   describe "indexed" $ do
     it "can index correctly, marking negative indices" $ do
-      let grown = toList . indexed . grow 'x' $ pure '-'
-      grown `shouldBe` [(-4, 'x'), (-3, 'x'), (-2, 'x'), (-1, 'x')
+      let grown = toList . indexed . grow 'x' $ Zipper 0 [] '-' []
+      grown `shouldBe` [(-2, 'x'), (-1, 'x')
                         ,(0, '-')
-                        ,(1, 'x'), (2, 'x'), (3, 'x'), (4, 'x')
+                        ,(1, 'x'), (2, 'x')
                         ]
-
+    it "can index correctly, marking negative indices from different base" $ do
+      let grown = toList . indexed . grow 'x' $ Zipper 7 [] '-' []
+      grown `shouldBe` [(5, 'x'), (6, 'x')
+                        ,(7, '-')
+                        ,(8, 'x'), (9, 'x')
+                        ]
