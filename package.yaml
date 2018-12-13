@@ -43,6 +43,14 @@ executables:
     - parsers
     - hspec
     - vector
+    - vector-instances
+    - unordered-containers
+    - hashable
+    - text
+    - QuickCheck
+    - async
+    - comonad
+    - attoparsec
 
 tests:
   adventofcode-test:
