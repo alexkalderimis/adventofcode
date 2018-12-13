@@ -1,28 +1,33 @@
 {-# LANGUAGE DeriveFunctor #-}
 
+import qualified Data.Time.Clock as Clock
 import           Control.Applicative
-import           Data.Array.Unboxed           ((//))
-import qualified Data.Array.Unboxed           as A
+import           Control.Monad
+import           Control.Monad.ST
+import qualified Data.Array                   as A
+import           Data.Array.ST
 import qualified Data.HashMap.Strict          as HM
-import           Data.List                    (foldl', nub, sort)
+import           Data.List                    (nub, sort)
 import           Data.Maybe
 import           Data.Text                    (Text)
 import qualified Data.Text                    as Text
+import           System.Exit
 import           Text.Parser.Char
 import           Text.Parser.Combinators      (choice, sepBy1)
 import           Text.ParserCombinators.ReadP (ReadP, readP_to_S)
 import           Text.Read                    (readMaybe)
+import Data.Int
 
 type Register = Text
-type Addr = Int
-type Memory = A.UArray Addr Int
-data Action = Inc Int | Dec Int deriving (Show)
+type Addr = Int8
+type Memory s = STUArray s Addr Int16
+data Action = Inc Int16 | Dec Int16 deriving (Show)
 data Comparison = Gt | Gte | Lt | Lte | Equ | Neq deriving (Show)
 
 data Condition a = Condition
   { condRegister   :: a
   , condComparison :: Comparison
-  , condComparand  :: Int
+  , condComparand  :: Int16
   } deriving (Show, Functor)
 
 data Instruction a = Instruction
@@ -36,51 +41,61 @@ type Program a = [Instruction a]
 main :: IO ()
 main = do
   inp <- getContents
-  let (maxval, mem) = runCode inp
-  putStrLn $ "Highest value seen: " ++ show maxval
-  putStrLn $ "Current highest value: " ++ show (maximum $ A.elems mem)
+  case runParser programP inp of
+    Nothing -> die "Cannot parse instructions"
+    Just p -> time $ do
+      let (maxval, mem) = runST $ do (p', mem) <- initialise p
+                                     mv <- run mem p'
+                                     imem <- freeze mem
+                                     return (mv, imem)
 
-runCode :: String -> (Int, Memory)
-runCode code = do
-  case runParser programP code of
-    Nothing -> (0, A.array (0,0) [])
-    Just p -> let (p', mem) = initialise p
-               in run (0, mem) p'
+      putStrLn $ "No. of registers: " ++ show (A.rangeSize $ A.bounds mem)
+      putStrLn $ "Highest value seen: " ++ show maxval
+      putStrLn $ "Current highest value: " ++ show (maximum $ A.elems mem)
+  where
+    time act = do
+      start <- Clock.getCurrentTime
+      act
+      end <- Clock.getCurrentTime
+      print (Clock.diffUTCTime end start)
 
-initialise :: Program Register -> (Program Addr, Memory)
-initialise p =
+initialise :: Program Register -> ST s (Program Addr, Memory s)
+initialise p = do
   let regs = nub $ sort (p >>= allRegisters)
-      mem = A.array (0, length regs - 1) (zip [0 ..] (pure 0 <$> regs))
       translation = HM.fromList (zip regs [0 ..])
-   in (fmap (fmap (translation HM.!)) p, mem)
+      prog = fmap (fmap (translation HM.!)) p
+  mem <- newArray (0, toEnum (length regs - 1)) 0
+  return (prog, mem)
 
 allRegisters :: Instruction a -> [a]
 allRegisters instr = [register instr, condRegister (condition instr)]
 
-run :: (Int, Memory) -> Program Addr -> (Int, Memory)
-run = foldl' $ \(highest, mem) instr ->
-  if evalCond mem (condition instr)
-   then let mem' = mem // [evalAction mem (register instr) (action instr)]
-         in (max highest (maximum $ A.elems mem'), mem')
-   else (highest, mem)
+run :: Memory s -> Program Addr -> ST s Int16
+run mem = (fmap maximum .) . mapM $ \instr -> do
+  c <- evalCond mem (condition instr)
+  when c $ do
+    val <- evalAction mem (register instr) (action instr)
+    writeArray mem (register instr) val
+  maximum <$> getElems mem
 
-evalAction :: Memory -> Addr -> Action -> (Addr, Int)
-evalAction mem reg act = let val = mem A.! reg
-                             f = case act of
-                                   Inc x -> (+ x)
-                                   Dec x -> (subtract x)
-                          in (reg, f val)
+evalAction :: Memory s -> Addr -> Action -> ST s Int16
+evalAction mem reg act = do
+  val <- readArray mem reg
+  let f = case act of Inc x -> (+ x)
+                      Dec x -> (subtract x)
+  return (f val)
 
-evalCond :: Memory -> Condition Addr -> Bool
-evalCond mem c = let val = mem A.! (condRegister c)
-                     f   = case condComparison c of
-                             Gt  -> (>)
-                             Gte -> (>=)
-                             Lt  -> (<)
-                             Lte -> (<=)
-                             Equ -> (==)
-                             Neq -> (/=)
-                  in f val (condComparand c)
+evalCond :: Memory s -> Condition Addr -> ST s Bool
+evalCond mem c = do
+  val <- readArray mem (condRegister c)
+  let f = case condComparison c of
+             Gt  -> (>)
+             Gte -> (>=)
+             Lt  -> (<)
+             Lte -> (<=)
+             Equ -> (==)
+             Neq -> (/=)
+  return (f val (condComparand c))
 
 runParser :: ReadP a -> String -> Maybe a
 runParser p = fmap fst . listToMaybe . reverse . readP_to_S p
@@ -99,7 +114,7 @@ registerP = Text.pack <$> some letter
 actionP :: ReadP Action
 actionP = choice [Inc <$ string "inc ", Dec <$ string "dec "] <*> intP
 
-intP :: ReadP Int
+intP :: ReadP Int16
 intP = (fromMaybe id <$> optional (negate <$ char '-')) <*> (read <$> some digit)
 
 conditionP :: ReadP (Condition Register)
