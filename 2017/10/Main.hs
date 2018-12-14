@@ -10,12 +10,8 @@ import           System.Environment
 import           System.Exit
 import           Test.Hspec
 
-data Zipper a = Zipper
-  { idx    :: Int
-  , lefts  :: [a]
-  , focus  :: a
-  , rights :: [a]
-  } deriving (Show, Eq, Functor)
+import qualified Elves.Zipper as Z
+import           Elves.Zipper (Zipper)
 
 main :: IO ()
 main = do
@@ -36,26 +32,30 @@ pt1 = do
 pt2 :: IO ()
 pt2 = B.interact hash >> putStrLn ""
 
+byteZipper :: Zipper Word8
+byteZipper = foldr Z.insertR (Z.singleton 0) [1 .. 255]
+
 hash :: B.ByteString -> B.ByteString
 hash input =
   let salt  = [17, 31, 73, 47, 23]
       bytes = B.unpack input ++ salt
       n     = B.length input + 5
-      p z (skip, len) = pinch 256 len skip z
+      p z (skip, len) = pinch len skip z
    in B.pack . hexadecimal . dense
-             . toList . rewind
-             . foldl' p (fromList [0 .. 255])
+             . Z.toList . Z.rewind
+             . foldl' p byteZipper
              . zip [0 ..]
              . take (n * 64)
              . cycle
              $ fmap fromIntegral bytes
 
 pinchHash :: Int -> [Int] -> Int
+pinchHash 0 = error "Knot must not be empty"
 pinchHash n
-  = product . take 2 . toList . rewind . foldl' pinch' z0 . zip [0 ..]
+  = product . take 2 . Z.toList . Z.rewind . foldl' pinch' z0 . zip [0 ..]
   where
-    z0 = fromList (take n [0 ..])
-    pinch' z (skip, len) = pinch n len skip z
+    z0 = foldr Z.insertR (Z.singleton 0) (take (n - 1) [1 ..])
+    pinch' z (skip, len) = pinch len skip z
 
 dense :: Bits byte => [byte] -> [byte]
 dense [] = []
@@ -72,44 +72,15 @@ hexadecimal = (>>= byteToHex)
                           l = b `mod` 16
                        in [hexChars A.! h, hexChars A.! l]
 
-fromList :: [a] -> Zipper a
-fromList []     = error "cannot build zipper for empty list"
-fromList (a:as) = Zipper 0 [] a as
-
-left :: Zipper a -> Zipper a
-left (Zipper i [] a [])         = Zipper i [] a []
-left (Zipper i [] a rs)         = left (Zipper i (reverse rs) a [])
-left (Zipper i (new:ls) old rs) = Zipper (pred i) ls new (old:rs)
-
-right :: Zipper a -> Zipper a
-right (Zipper i [] a [])         = Zipper i [] a []
-right (Zipper i ls a [])         = right (Zipper i [] a (reverse ls))
-right (Zipper i ls old (new:rs)) = Zipper (succ i) (old:ls) new rs
-
-shift :: Int -> Zipper a -> Zipper a
-shift 0 z = z
-shift n z
-  | n < 0     = shift (succ n) (left z)
-  | otherwise = shift (pred n) (right z)
-
-shiftTo :: Int -> Zipper a -> Zipper a
-shiftTo i z = shift (i - idx z) z
-
-toList :: Zipper a -> [a]
-toList z = focus z : rights z ++ reverse (lefts z)
-
 -- perform a round of the pinch hash.
 -- This takes the length of the zipper to avoid having to recalculate it
 -- each round.
-pinch :: Int -> Int -> Int -> Zipper a -> Zipper a
-pinch zlen len skip z
-  = let (pinched, rst) = splitAt len (toList z)
-        z'             = (fromList (reverse pinched ++ rst)) { idx = idx z }
-        idx'           = (idx z + len + skip) `mod` zlen
-    in shiftTo idx' z'
-
-rewind :: Zipper a -> Zipper a
-rewind = shiftTo 0
+pinch :: Int -> Int -> Zipper a -> Zipper a
+pinch len skip z
+  = let (pinched, rst) = splitAt len (Z.toList z)
+        (x:xs)         = reverse pinched ++ rst
+        idx'           = (Z.idx z + len + skip) `mod` Z.zlen z
+    in Z.shiftTo idx' z { Z.lefts = [], Z.focus = x, Z.rights = xs }
 
 spec :: Spec
 spec = do
