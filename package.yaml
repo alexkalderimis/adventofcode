@@ -51,6 +51,7 @@ executables:
     - async
     - comonad
     - attoparsec
+    - bytestring
 
 tests:
   adventofcode-test:
