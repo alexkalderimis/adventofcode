@@ -1,20 +1,15 @@
 {-# LANGUAGE DeriveFunctor #-}
 
+import           Data.Function
 import           Data.List                   (unfoldr)
-import qualified Data.Tree                   as Tree
 import qualified Data.Vector.Generic.Mutable as GM
 import qualified Data.Vector.Unboxed.Mutable as U
 import           Data.Word
 import           System.Environment
 import           System.Exit
 
-data Zipper a = Zipper
-  { idx    :: Int
-  , zlen   :: Int
-  , lefts  :: [a]
-  , focus  :: a
-  , rights :: [a]
-  } deriving (Show, Eq, Functor)
+import           Elves.Zipper                (Zipper)
+import qualified Elves.Zipper                as Z
 
 main :: IO ()
 main = do
@@ -35,7 +30,7 @@ pt2 = pt2StateMachine [0,7,4,5,0,1]
 -- is just too slow
 
 initScoreBoard :: Num n => Zipper n
-initScoreBoard = fromList [3,7]
+initScoreBoard = Z.singleton 3 & Z.insertR 7
 
 -- more efficient state machine, based on mutable vectors.
 -- Uglier more convoluted code, but orders of magnitude quicker
@@ -75,7 +70,7 @@ theSequence :: [Word8]
 theSequence = [3,7] ++ (concat $ unfoldr go ((0,1), initScoreBoard))
   where
     go (positions, z) = let (ps', z') = run positions z
-                         in Just (rights z', (ps', z'))
+                         in Just (Z.rights z', (ps', z'))
 
 indexOf :: Eq a => [a] -> [a] -> Maybe Int
 indexOf [] = \_ -> error "Cannot search for empty sequence"
@@ -92,46 +87,13 @@ indexOf (n:eedle) = go 0
 run :: (Integral a, Num a, Show a, Read a)
     => (Int,Int) -> Zipper a -> ((Int, Int), Zipper a)
 run (idxa, idxb) z
-  = let vala = focus $ shiftTo idxa z
-        valb = focus $ shiftTo idxb z
+  = let vala = Z.focus $ Z.shiftTo idxa z
+        valb = Z.focus $ Z.shiftTo idxb z
         newRecipes = digits (vala + valb)
-        z' = foldr insertR (shiftToEnd z) newRecipes
-        idxa' = (idxa + (fromIntegral vala) + 1) `mod` zlen z'
-        idxb' = (idxb + (fromIntegral valb) + 1) `mod` zlen z'
+        z' = foldr Z.insertR (Z.shiftToEnd z) newRecipes
+        idxa' = (idxa + (fromIntegral vala) + 1) `mod` Z.zlen z'
+        idxb' = (idxb + (fromIntegral valb) + 1) `mod` Z.zlen z'
      in ((idxa', idxb'), z')
 
 digits :: (Show a, Read b, Num b) => a -> [b]
 digits = fmap (read . return) . show
-
-left :: Zipper a -> Zipper a
-left (Zipper i n [] a [])         = Zipper i n [] a []
-left (Zipper i n [] a rs)         = left (Zipper i n (reverse rs) a [])
-left (Zipper i n (new:ls) old rs) = Zipper (pred i) n ls new (old:rs)
-
-right :: Zipper a -> Zipper a
-right (Zipper i _ [] a [])         = Zipper i 1 [] a []
-right (Zipper i n ls a [])         = right (Zipper i n [] a (reverse ls))
-right (Zipper i n ls old (new:rs)) = Zipper (succ i) n (old:ls) new rs
-
-insertR :: a -> Zipper a -> Zipper a
-insertR elem (Zipper i n ls a rs) = Zipper i (n + 1) ls a (elem:rs)
-
-shiftToEnd :: Zipper a -> Zipper a
-shiftToEnd z = shiftTo (zlen z - 1) z
-
-shift :: Int -> Zipper a -> Zipper a
-shift 0 z = z
-shift n z
-  | n < 0     = shift (succ n) (left z)
-  | otherwise = shift (pred n) (right z)
-
-shiftTo :: Int -> Zipper a -> Zipper a
-shiftTo i z = shift (i - idx z) z
-
-toList :: Zipper a -> [a]
-toList z = focus z : rights z ++ reverse (lefts z)
-
-fromList :: [a] -> Zipper a
-fromList []     = error "cannot build zipper for empty list"
-fromList (a:as) = Zipper 0 (1 + length as) [] a as
-
