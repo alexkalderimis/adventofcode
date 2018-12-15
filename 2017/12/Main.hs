@@ -57,15 +57,10 @@ clique = go mempty
 buildVillage :: Connections -> Village
 buildVillage conns = fmap node (M.keys conns)
   where
-    node p = Node p (maybe [] (fmap node . S.toList) (M.lookup p conns))
+    node p = Node p (fmap node . S.toList . fromMaybe mempty $ M.lookup p conns)
 
 buildConnections :: [(Person, [Person])] -> Connections
-buildConnections links
-  = M.fromListWith (<>)
-  $ [(p, set) | (lhs, rhs) <- links
-              , let set = S.fromList (lhs:rhs)
-              , p <- lhs:rhs
-    ]
+buildConnections = M.fromListWith (<>) . fmap (fmap S.fromList)
 
 -- input parsing
 linksP :: Parser (Person, [Person])
