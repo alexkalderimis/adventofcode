@@ -52,15 +52,21 @@ import qualified Data.Text.IO            as Text
 import           System.Environment
 import           System.Exit
 import           Test.Hspec
+import Test.QuickCheck
 import           Text.Parser.Char
 import           Text.Parser.Combinators (choice, sepBy1)
 import           Text.Printf
 
 data Coord = Coord { _x, _y :: Int } deriving (Show, Eq)
 
-data Direction = NW | N | NE
-               | SW | S | SE
-               deriving (Show, Eq)
+data Direction = NW | N | NE | SE | S | SW
+               deriving (Show, Eq, Enum)
+
+instance Arbitrary Direction where
+  arbitrary = elements [NW .. SW]
+
+instance Arbitrary Coord where
+  arbitrary = Coord <$> arbitrary <*> arbitrary
 
 main :: IO ()
 main = do
@@ -151,6 +157,31 @@ spec = do
       parseInput "ne,ne,s,s" `shouldBe` pure [NE,NE,S,S]
     it "can parse ex. path 4" $ do
       parseInput "se,sw,se,sw,sw" `shouldBe` pure [SE,SW,SE,SW,SW]
+  describe "move" $ do
+    it "results in a different point" $
+      property $ \dir point -> move point dir /= point
+    describe "cycles" $ do
+      let cycles = [ -- clockwise
+                    [N,SE,SW]
+                   ,[NE,S,NW]
+                   ,[SE,SW,N]
+                   ,[S,NW,NE]
+                   ,[SW,N,SE]
+                   ,[NW,NE,S]
+                   -- anti-clockwise
+                   ,[N,SW,SE]
+                   ,[NE,NW,S]
+                   ,[SE,N,SW]
+                   ,[S,NE,NW]
+                   ,[SW,SE,N]
+                   ,[NW,S,NE]
+                   ]
+      it "knows that moving a point in a cycle ends up at that same point" $ do
+        property $ forAll (elements cycles) $ \cycle point ->
+          foldl' move point cycle == point
+      it "knows that failing to complete a cycle does not come home" $ do
+        property $ forAll (elements cycles) $ \cycle point ->
+          foldl' move point (take 2 cycle) /= point
   describe "hexDistance" $ do
     let origin = Coord 0 0
         table = [((0,0), 0)
@@ -167,4 +198,9 @@ spec = do
     forM_ table $ \((y,x), expected) -> do
       it (printf "Knows the distance from {x: %d, y: %d}" x y) $ do
         hexDistance origin (Coord x y) `shouldBe` expected
-
+    it "is commutative" $ do
+      property $ \a b -> hexDistance a b == hexDistance b a
+    it "knows that any straight line is the shortest path" $
+      property $ forAll (arbitrary `suchThat` (>= 0)) $ \n dir point ->
+        let point' = foldl' move point (replicate n dir)
+         in hexDistance point point' == n
