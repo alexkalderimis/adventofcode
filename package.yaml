@@ -24,6 +24,25 @@ dependencies:
 
 library:
   source-dirs: src
+  dependencies:
+    - psqueues
+    - array
+    - containers
+    - time
+    - mtl
+    - parsers
+    - hspec
+    - vector
+    - vector-instances
+    - unordered-containers
+    - hashable
+    - text
+    - QuickCheck
+    - async
+    - comonad
+    - attoparsec
+    - bytestring
+    - lens
 
 executables:
   adventofcode-exe:
@@ -52,6 +71,7 @@ executables:
     - comonad
     - attoparsec
     - bytestring
+    - lens
 
 tests:
   adventofcode-test:

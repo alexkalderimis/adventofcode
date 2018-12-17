@@ -50,12 +50,29 @@ data GameState = GameState
   , _unmoved :: [(Location,Creature)]
   , _killed :: HS.HashSet CreatureId
   , _alive :: (Int, Int)
+  , _elfPower :: Int
   } deriving (Show)
 
 makeLenses ''GameState
 
 newtype Game a = Game { runGame :: State GameState a }
   deriving (Functor, Applicative, Monad, MonadState GameState)
+
+main :: IO ()
+main = do
+  gs <- parseInput <$> getContents
+  r <- sim gs
+  
+  print r
+  putStrLn $ "OUTCOME: " ++ show (fullRounds r * totalHP r)
+  let mep = findMinElfPower gs
+  putStrLn $ "MIN ELF POWER: " ++ maybe "impossible" show mep
+  case mep of
+    Nothing -> return ()
+    Just ep -> do let r' = result $ play game gs { _elfPower = ep }
+                  print r'
+                  putStrLn $ "OUTCOME: " ++ show (fullRounds r' * totalHP r')
+
 
 play :: Game a -> GameState -> GameState
 play g s = execState (runGame g) s
@@ -183,7 +200,9 @@ attack side loc = do
     Nothing -> return ()
     Just (loc, enemy) -> do
       creatures #%= M.delete loc
-      let injured = enemy & hp -~ attackPower
+      power <- case side of Elf -> pure attackPower
+                            Goblin -> use elfPower
+      let injured = enemy & hp -~ power
       if dead injured
         then do killed #%= HS.insert (injured ^. creatureId)
                 alive  #%= (aliveLens (injured ^. alliegance) -~ 1)
@@ -220,6 +239,8 @@ parseInput str =
    in GameState dng cs 0 [] mempty (length (filter (== 'E') str)
                                    ,length (filter (== 'G') str)
                                    )
+                                   attackPower
+
 
 cellP :: CreatureId -> Location -> Char -> (Location, Feature, Maybe Creature)
 cellP cid loc c = uncurry (loc,,) $ case c of
@@ -292,19 +313,34 @@ exampleThree = unlines
 
 data Result = Result { wonBy :: Maybe Allegiance
                      , totalHP :: Int
-                     , fullRounds :: Int }
+                     , fullRounds :: Int
+                     }
   deriving (Show, Eq)
 
 result :: GameState -> Result
-result gs = Result (winner gs) (sum (gs ^.. currentCreatures.hp)) (gs ^. rounds)
+result gs = Result (winner gs)
+                   (sum (gs ^.. currentCreatures.hp))
+                   (gs ^. rounds)
 
-sim :: GameState -> IO ()
+sim :: GameState -> IO Result
 sim gs = do
   let gs' = play (preLoop >> gameLoop) gs
   putStrLn (showGameState True gs')
   if evalState (runGame gameOver) gs'
-     then return ()
+     then return (result gs')
      else sim gs'
+
+findMinElfPower :: GameState -> (Maybe Int)
+findMinElfPower gs = go (4,200)
+  where 
+    es = fst (gs ^. alive)
+    go rng | A.rangeSize rng < 2 = listToMaybe (A.range rng)
+    go rng = let p = mid rng
+                 gs' = play game gs { _elfPower = p }
+              in if es == fst (gs' ^. alive)
+                   then go (fst rng, p)
+                   else go (p + 1, snd rng)
+    mid rng = A.range rng !! (A.rangeSize rng `div` 2 - 1)
 
 spec :: Spec
 spec = do
@@ -349,7 +385,7 @@ spec = do
                   ,"#G.##.#"
                   ,"#...#E#"
                   ,"#...E.#"
-                  ,"#######"
+                  ,"#######" 
                   ], Result (Just Elf) 982 37
                  )
                 ,(unlines
@@ -427,4 +463,65 @@ spec = do
     it "should kill the goblin on line 3" $ do
       let s = execState (runGame $ attack Goblin (3,3)) gs'
       (s ^. killed & HS.size) `shouldBe` 1
+  describe "findMinElfPower" $ do
+    let test = findMinElfPower . parseInput
+        table = [(unlines
+                  ["#######"
+                  ,"#.G...#"
+                  ,"#...EG#"
+                  ,"#.#.#G#"
+                  ,"#..G#E#"
+                  ,"#.....#"
+                  ,"#######"
+                  ], 15
+                 )
+                ,(unlines
+                  ["#######"
+                  ,"#E..EG#"
+                  ,"#.#G.E#"
+                  ,"#E.##E#"
+                  ,"#G..#.#"
+                  ,"#..E#.#"
+                  ,"#######"
+                  ], 4
+                 )
+                ,(unlines
+                  ["#######"
+                  ,"#E.G#.#"
+                  ,"#.#G..#"
+                  ,"#G.#.G#"
+                  ,"#G..#.#"
+                  ,"#...E.#"
+                  ,"#######" 
+                  ], 15
+                  )
+                ,(unlines
+                  ["#######"
+                  ,"#.E...#"
+                  ,"#.#..G#"
+                  ,"#.###.#"
+                  ,"#E#G#G#"
+                  ,"#...#G#"
+                  ,"#######"
+                  ], 12
+                 )
+                ,(unlines
+                  ["#########"
+                  ,"#G......#"
+                  ,"#.E.#...#"
+                  ,"#..##..G#"
+                  ,"#...##..#"
+                  ,"#...#...#"
+                  ,"#.G...G.#"
+                  ,"#.....G.#"
+                  ,"#########"
+                  ], 34
+                 )
+                ]
+    forM_ (zip [1 ..] table) $ \(i, (board, expected)) -> do
+      let title = unwords ["min elf power required for example"
+                          , show i, "is", show expected
+                          ]
+      it title $ do
+        test board `shouldBe` Just expected
 
