@@ -1,26 +1,26 @@
 {-# LANGUAGE DeriveFunctor #-}
 
-import Test.Hspec
-import Test.QuickCheck (Arbitrary, arbitrary, property)
-import qualified Data.HashSet as S
-import qualified Data.List.NonEmpty as NE
-import           Data.List.NonEmpty (NonEmpty((:|)))
-import           Data.List (dropWhileEnd)
-import Data.Maybe
-import Control.Comonad
-import Control.Monad
-import Data.Bool
-import System.Exit
-import System.Environment
-import Control.Applicative
-import qualified Data.Text as Text
-import           Data.Text (Text)
-import qualified Data.HashMap.Strict as HM
-import Text.Read (readMaybe)
-import Text.Parser.Combinators (choice, sepBy1, sepByNonEmpty)
-import Text.Parser.Char
-import Text.ParserCombinators.ReadP (readP_to_S, ReadP)
-import qualified Data.Array.Unboxed as A
+import           Control.Applicative
+import           Control.Comonad
+import           Control.Monad
+import qualified Data.Array.Unboxed           as A
+import           Data.Bool
+import qualified Data.HashMap.Strict          as HM
+import qualified Data.HashSet                 as S
+import           Data.List                    (dropWhileEnd)
+import           Data.List.NonEmpty           (NonEmpty ((:|)))
+import qualified Data.List.NonEmpty           as NE
+import           Data.Maybe
+import           Data.Text                    (Text)
+import qualified Data.Text                    as Text
+import           System.Environment
+import           System.Exit
+import           Test.Hspec
+import           Test.QuickCheck              (Arbitrary, arbitrary, property)
+import           Text.Parser.Char
+import           Text.Parser.Combinators      (choice, sepBy1, sepByNonEmpty)
+import           Text.ParserCombinators.ReadP (ReadP, readP_to_S)
+import           Text.Read                    (readMaybe)
 
 data Zipper a = Zipper { zOffset :: Int, ls :: [a], focus :: a, rs :: [a] }
   deriving (Eq, Show, Functor)
@@ -80,12 +80,12 @@ fromCycle n c = let (Just z) = runParser (fromNonEmpty . NE.fromList <$> some pl
                 in toPlantState (z { zOffset = cycleOffset c + (n * cycleOffsetDX c) })
 
 data Cycle = Cycle
-  { cycleKey :: Text
-  , cycleStart :: Int
-  , cycleLength :: Int
+  { cycleKey      :: Text
+  , cycleStart    :: Int
+  , cycleLength   :: Int
   , cycleStartVal :: Int
-  , cycleVal :: Int
-  , cycleOffset :: Int
+  , cycleVal      :: Int
+  , cycleOffset   :: Int
   , cycleOffsetDX :: Int
   } deriving (Show)
 
@@ -146,7 +146,7 @@ runRulesA rules = let r = compileRules rules
                       go n ps = case n of
                                   0 -> ps
                                   n -> go (n - 1) (stepPlantState r ps)
-                   in go 
+                   in go
 
 stepPlantState :: Rule Bool Bool -> PlantState -> PlantState
 stepPlantState r ps =
@@ -163,7 +163,7 @@ stepPlantState r ps =
              (ps ?! i)
              (ps ?! (i + 1))
              (ps ?! (i + 2))
-          
+
 
 fromPlantState :: PlantState -> Zipper Bool
 fromPlantState ps = let (Just z) = fromList (A.elems ps)
@@ -187,7 +187,7 @@ right _ = Nothing
 
 left :: Zipper a -> Maybe (Zipper a)
 left (Zipper os (new:lhs) old rhs) = Just $ Zipper (pred os) lhs new (old:rhs)
-left _ = Nothing
+left _                             = Nothing
 
 rewind :: Zipper a -> Zipper a
 rewind z = case left z of
@@ -198,7 +198,7 @@ fromNonEmpty :: NonEmpty a -> Zipper a
 fromNonEmpty (a :| as) = Zipper 0 [] a as
 
 fromList :: [a] -> Maybe (Zipper a)
-fromList [] = Nothing
+fromList []     = Nothing
 fromList (a:as) = Just $ Zipper 0 [] a as
 
 toList :: Zipper a -> [a]

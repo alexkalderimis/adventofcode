@@ -1,12 +1,12 @@
-{-# LANGUAGE TupleSections #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TupleSections     #-}
 
 import           Control.Applicative
 import qualified Data.Array              as A
 import           Data.Attoparsec.Text    (Parser, parseOnly)
 import           Data.Bool
 import           Data.Foldable           (foldl')
-import           Data.List (unfoldr)
+import           Data.List               (unfoldr)
 import qualified Data.Map.Strict         as M
 import qualified Data.Set                as S
 import           Data.Text               (Text)
@@ -16,7 +16,7 @@ import           System.Environment
 import           System.Exit
 import           Text.Parser.Char
 import           Text.Parser.Combinators (between, sepBy1)
-import Text.Printf
+import           Text.Printf
 
 type Coord = (Int, Int)
 
@@ -94,7 +94,7 @@ showScan water scan = unlines [line y | y <- [0 .. maxy]]
            ++ [cell (y,x) | x <- [pred minx .. succ maxx]]
     cell (0,500) = '+'
     cell loc | Just w <- M.lookup loc water = case w of Standing -> '~'
-                                                        Falling -> '|'
+                                                        Falling  -> '|'
     cell loc | not (A.inRange (A.bounds scan) loc) = '.'
     cell loc = case scan A.! loc of
                  Sand -> '.'
