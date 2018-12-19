@@ -72,6 +72,7 @@ executables:
     - attoparsec
     - bytestring
     - lens
+    - optparse-generic
 
 tests:
   adventofcode-test:
