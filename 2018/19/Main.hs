@@ -1,70 +1,70 @@
-{-# LANGUAGE DeriveFunctor     #-}
-{-# LANGUAGE DeriveGeneric     #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE RankNTypes        #-}
 {-# LANGUAGE RecordWildCards   #-}
-{-# LANGUAGE TemplateHaskell   #-}
+{-# LANGUAGE TupleSections     #-}
 
 import           Control.Applicative
 import           Control.Lens
-import           Control.Lens.TH
+import           Control.Monad.ST
 import qualified Data.Array              as A
-import           Data.Array.Base         (unsafeAt)
+import           Data.Array.Base         (unsafeRead, unsafeWrite)
+import qualified Data.Array.ST           as SA
+import qualified Data.Array.Unboxed      as UA
 import           Data.Attoparsec.Text    (Parser, parseOnly)
 import           Data.Bits
 import           Data.Bool
-import           Data.Char
-import           Data.Foldable           (foldl')
-import           Data.Hashable
-import qualified Data.Map.Strict         as M
 import           Data.Text               (Text)
 import qualified Data.Text               as Text
 import qualified Data.Text.IO            as Text
-import           GHC.Generics
 import           System.Environment
 import           System.Exit
 import           Text.Parser.Char
 import           Text.Parser.Combinators (choice, sepBy1)
-import           Text.Printf
 
-data Memory = Memory {
-  _regA,_regB,_regC,_regD,_regE,_regF :: !Int
-  } deriving (Show, Eq, Generic)
+type Memory = UA.UArray Int Int
 
-instance Hashable Memory
+newtype Register = Register Int deriving (Show, Eq)
 
-makeLenses ''Memory
+newtype ActiveMemory s = ActiveMemory { activeMemory :: SA.STUArray s Int Int }
 
-newtype MemoryLens = MemoryLens { ml :: Lens' Memory Int }
+data OpCode = Add | Mul | Band | Bor | Set | Gtr | Equ deriving (Show, Eq)
 
-data Argument = Register | Value deriving (Show)
+readRegister :: Register -> ActiveMemory s -> ST s Int
+readRegister (Register i) (ActiveMemory m) = unsafeRead m i
 
-data Instruction = Addr
-                 | Addi
-                 | Mulr
-                 | Muli
-                 | Banr
-                 | Bani
-                 | Borr
-                 | Bori
-                 | Setr
-                 | Seti
-                 | GtIR
-                 | GtRI
-                 | GtRR
-                 | EqIR
-                 | EqRI
-                 | EqRR
-                 deriving (Show, Eq, Ord, Enum, Bounded)
+writeRegister :: ActiveMemory s -> Register -> Int -> ST s ()
+writeRegister (ActiveMemory m) (Register i) v = unsafeWrite m i v
 
-data ByteCode a = ByteCode
-  { opCode :: a
-  , args   :: (Int, Int, Int)
-  } deriving (Show, Eq, Functor)
+-- we avoid illegal register access by guaranteeing that register
+-- access is legal at parse-time.
+data ByteCode
+             = RROperator
+               { opCode :: OpCode
+               , regA   :: !Register
+               , regB   :: !Register
+               , retReg :: !Register
+               }
+             | RIOperator
+               { opCode :: OpCode
+               , regA   :: !Register
+               , valB   :: !Int
+               , retReg :: !Register
+               }
+             | IROperator
+               { opCode :: OpCode
+               , valA   :: !Int
+               , regB   :: !Register
+               , retReg :: !Register
+               }
+             | IAnyOperator
+               { opCode :: OpCode
+               , valA   :: !Int
+               , retReg :: !Register
+               }
+              deriving (Show, Eq)
 
 data Input = Input
-  { instructionPtr :: MemoryLens
-  , programme      :: A.Array Int (ByteCode Instruction)
+  { instructionPtr :: Register
+  , programme      :: A.Array Int ByteCode
   }
 
 inputP :: Parser Input
@@ -73,98 +73,77 @@ inputP = Input <$> (instructionPtrP <* newline)
   where
     mkProg is = A.listArray (0,length is - 1) is
 
-instructionPtrP :: Parser MemoryLens
-instructionPtrP = do
-  string "#ip "
-  p <- intP
-  maybe empty pure (reg p)
+instructionPtrP :: Parser Register
+instructionPtrP = string "#ip " *> regP
 
-instrP :: Parser (ByteCode Instruction)
-instrP = do
-  op <- opP
-  space
-  args <- (,,) <$> (intP <* space) <*> (intP <* space) <*> intP
-  return (ByteCode op args)
+instrP :: Parser ByteCode
+instrP = choice [rrOpP, riOpP, irOpP, iAnyP]
 
-opP :: Parser Instruction
-opP = choice [instr <$ string (fmap toLower $ show instr)
-                 | instr <- [minBound .. maxBound]]
+rrOpP = RROperator <$> choice [Add  <$ string "addr"
+                              ,Mul  <$ string "mulr"
+                              ,Band <$ string "banr"
+                              ,Bor  <$ string "borr"
+                              ,Gtr  <$ string "gtrr"
+                              ,Equ  <$ string "eqrr"
+                              ]
+                  <*> (space *> regP)
+                  <*> (space *> regP)
+                  <*> (space *> regP)
+
+riOpP = RIOperator <$> choice [Add  <$ string "addi"
+                              ,Mul  <$ string "muli"
+                              ,Band <$ string "bani"
+                              ,Bor  <$ string "bori"
+                              ,Gtr  <$ string "gtri"
+                              ,Equ  <$ string "eqri"
+                              ,Set  <$ string "setr"
+                              ]
+                  <*> (space *> regP)
+                  <*> (space *> intP)
+                  <*> (space *> regP)
+
+-- only valid for comparisons
+irOpP = IROperator <$> choice [Gtr  <$ string "gtir"
+                              ,Equ  <$ string "eqir"
+                              ]
+                  <*> (space *> intP)
+                  <*> (space *> regP)
+                  <*> (space *> regP)
+
+-- only valid for seti
+iAnyP = IAnyOperator <$> (Set  <$ string "seti")
+                  <*> (space *> intP)
+                  <*> (space >> intP >> space *> regP)
+
+regP :: Parser Register
+regP = intP >>= maybe empty pure . reg
 
 intP :: Parser Int
 intP = read <$> some digit
 
 -- either would be a bit more useful here, but Maybe is faster.
-reg :: Int -> Maybe MemoryLens
-reg 0 = pure (MemoryLens regA)
-reg 1 = pure (MemoryLens regB)
-reg 2 = pure (MemoryLens regC)
-reg 3 = pure (MemoryLens regD)
-reg 4 = pure (MemoryLens regE)
-reg 5 = pure (MemoryLens regF)
-reg n = Nothing
-
-{-# INLINE rrOp #-}
-{-# INLINE riOp #-}
-rrOp, riOp :: (Int -> Int -> Int) -> Memory -> (Int, Int, Int) -> Maybe Memory
-
-rrOp f m (a,b,c) = do
-  la <- reg a
-  lb <- reg b
-  lc <- reg c
-  return $ m & (ml lc) .~ (f (m ^. (ml la)) (m ^. (ml lb)))
-
-riOp f m (a,b,c) = do
-  la <- reg a
-  lc <- reg c
-  return $ m & (ml lc) .~ (f (m ^. (ml la)) b)
-
-{-# INLINE cmpIR #-}
-{-# INLINE cmpRI #-}
-{-# INLINE cmpRR #-}
-cmpIR, cmpRI, cmpRR :: Ordering -> Memory -> (Int, Int, Int) -> Maybe Memory
-
-cmpIR cmp m (a,b,c) = do
-  lb <- reg b
-  lc <- reg c
-  let ret = bool 0 1 (compare a (m ^. ml lb) == cmp)
-  return $ m & (ml lc) .~ ret
-
-cmpRI cmp m (a,b,c) = do
-  la <- reg a
-  lc <- reg c
-  let ret = bool 0 1 (compare (m ^. ml la) b == cmp)
-  return $ m & (ml lc) .~ ret
-
-cmpRR cmp m (a,b,c) = do
-  la <- reg a
-  lb <- reg b
-  lc <- reg c
-  let ret = bool 0 1 (compare (m ^. ml la) (m ^. ml lb) == cmp)
-  return $ m & (ml lc) .~ ret
+reg :: Int -> Maybe Register
+reg n = if A.inRange (0,5) n then pure $ Register n
+                             else Nothing
 
 {-# INLINE eval #-}
-eval :: Instruction -> Memory -> (Int, Int, Int) -> Maybe Memory
-eval Addr = rrOp (+)
-eval Addi = riOp (+)
-eval Mulr = rrOp (*)
-eval Muli = riOp (*)
-eval Banr = rrOp (.&.)
-eval Bani = riOp (.&.)
-eval Borr = rrOp (.|.)
-eval Bori = riOp (.|.)
-eval Setr = \m (a,_,c) -> do
-  la <- reg a
-  lc <- reg c
-  return $ m & (ml lc) .~ (m ^. ml la)
-eval Seti = \m (a,_,c) -> do
-  lc <- reg c
-  return $ m & (ml lc) .~ a
-eval GtIR = cmpIR GT
-eval GtRI = cmpRI GT
-eval GtRR = cmpRR GT
-eval EqIR = cmpIR EQ
-eval EqRI = cmpRI EQ
-eval EqRR = cmpRR EQ
+eval :: ByteCode -> ActiveMemory s -> ST s ()
+eval bc m = op bc >>= writeRegister m (retReg bc)
+  where
+        f Add  = (+)
+        f Mul  = (*)
+        f Band = (.&.)
+        f Bor  = (.|.)
+        f Set  = const
+        f Gtr  = cmp GT
+        f Equ  = cmp EQ
+
+        cmp ord a b = bool 0 1 (compare a b == ord)
+
+        op RROperator{..}   = f opCode <$> readRegister regA m <*> readRegister regB m
+        op RIOperator{..}   = f opCode <$> readRegister regA m <*> pure valB
+        op IROperator{..}   = f opCode valA <$> readRegister regB m
+        op IAnyOperator{..} = pure (f opCode valA 0)
 
 exampleInput :: Text
 exampleInput = Text.unlines
@@ -180,28 +159,37 @@ exampleInput = Text.unlines
 
 main :: IO ()
 main = do
-  einp <- parseOnly inputP <$> Text.getContents
-  case einp of
-    Left err -> die err
-    Right prg -> do
-      args <- getArgs
-      case args of
-        ["pt1"] -> print $ runProgramme prg newMemory
-        ["pt2"] -> print $ runProgramme prg (newMemory & regA .~ 1)
-        _       -> die $ "Bad arguments : " ++ show args
+  args <- getArgs
+  case args of
+    ["pt1"]  -> run newMemory
+    ["pt2"]  -> run (newMemory & ix 0 .~ 1)
+    ["test"] -> do let (Right prg) = parseOnly inputP exampleInput
+                       ret = UA.elems (runProgramme prg newMemory)
+                   if ret == [6, 5, 6, 0, 0, 9]
+                      then putStrLn "OK"
+                      else die $ "FAIL: " ++ show ret
+    _       -> die $ "Bad arguments : " ++ show args
+  where
+    run mem = do
+      einp <- parseOnly inputP <$> Text.getContents
+      case einp of
+        Left err  -> die err
+        Right prg -> print $ runProgramme prg mem
 
 newMemory :: Memory
-newMemory = Memory 0 0 0 0 0 0
+newMemory = UA.listArray (0,5) (repeat 0)
 
 runProgramme :: Input -> Memory -> Memory
-runProgramme input = go 0
+runProgramme input mem = SA.runSTUArray (SA.thaw mem >>= run . ActiveMemory)
   where
     ipReg    = instructionPtr input
     instrs   = programme input
 
-    go ip m = case instrs ^? ix ip of
-                Nothing           -> m
-                Just ByteCode{..} -> case eval opCode (m & ml ipReg .~ ip) args of
-                                       Nothing  -> error "register error"
-                                       Just mem -> mem `seq` go (1 + mem ^. ml ipReg) mem
+    run m = let go ip = case instrs ^? ix ip of
+                          Nothing -> return (activeMemory m)
+                          Just op -> do writeRegister m ipReg ip
+                                        eval op m
+                                        ip' <- readRegister ipReg m
+                                        go (1 + ip')
+             in go 0
 
