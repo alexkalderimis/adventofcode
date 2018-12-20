@@ -188,7 +188,7 @@ runProgramme mem Input{..} = SA.runSTUArray (SA.thaw mem >>= run . ActiveMemory)
                                         eval op m
                                         ip' <- readRegister instructionPtr m
                                         go (1 + ip')
-             in go 0
+             in go (fst $ A.bounds programme) -- start at first instruction
 
 --- helper to make instructions more intelligible for reverse engineering
 symbolicly :: Input -> String
@@ -214,5 +214,7 @@ symbolicly Input{..} = unlines $ ("#ip " ++ symbol instructionPtr)
     op Gtr  = ">"
     op Equ  = "=="
     
+subProgramme :: (Int, Int) -> Input -> Input
+subProgramme bs inp = inp { programme = A.array bs (filter ((A.inRange bs) . fst) (A.assocs (programme inp))) }
 
                     

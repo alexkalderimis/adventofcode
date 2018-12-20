@@ -1,0 +1,39 @@
+#ip d
+00: goto 17
+01: b =  1
+02: e =  1       
+03: c = b * e    # c = 1 * 1 = 1
+04: c = c == f   # if (c == f) {
+05: goto 7 if (c == f)
+06: goto 8
+07: a += b       # a += b if (c != f)
+08: e += 1
+09: c = e > f    # if (e > f) 
+10: goto 12 if (e > f)
+11: goto 3
+12: b += 1
+13: c = b > f
+14: goto 16 if (b > f)
+15: goto 2
+16: goto 256   # HALT
+17: f += 2     # <- programme starts here
+18: f *= f
+19: f *= 19
+20: f *= 11
+21: c += 5
+22: c *= 22
+23: c += 21
+24: f += c
+25: skip a     # <-- pt1. when a = 0, we start with f = 967
+26: goto 1     # Begin the loop
+27: c = 27
+28: c *= 28
+29: c += 29
+30: c *= 30
+31: c *= 14
+32: c *= 32
+33: f = f + c
+34: a =  0   # reset a = 0
+35: goto 1   # <-- pt2. when a = 1, we start with a much larger value of f
+             # namely: 10551367
+
