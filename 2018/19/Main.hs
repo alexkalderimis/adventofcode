@@ -4,6 +4,7 @@
 
 import           Control.Applicative
 import           Control.Lens
+import           Control.Monad
 import           Control.Monad.ST
 import qualified Data.Array              as A
 import           Data.Array.Base         (unsafeRead, unsafeWrite)
@@ -157,6 +158,16 @@ exampleInput = Text.unlines
   ,"seti 8 0 4"
   ,"seti 9 0 5"
   ]
+
+-- an efficient way to actually solve this problem. 
+-- See input.symbolic for the reasoning behind this.
+sumOfFactors :: Int -> Int
+sumOfFactors target =
+  sum [b + b' | b <- takeWhile ((<= target) . join (*)) [1 ..]
+      , let (q,r) = target `divMod` b
+      , r == 0
+      , let b' = if b == q then 0 else q
+      ]
 
 main :: IO ()
 main = do
