@@ -2,13 +2,13 @@
 00: goto 17
 01: b =  1
 02: e =  1       
-03: c = b * e    # c = 1 * 1 = 1
-04: c = c == f   # if (c == f) {
+03: c = b * e 
+04: c = c == f 
 05: goto 7 if (c == f)
 06: goto 8
-07: a += b       # a += b if (c != f)
+07: a += b
 08: e += 1
-09: c = e > f    # if (e > f) 
+09: c = e > f
 10: goto 12 if (e > f)
 11: goto 3
 12: b += 1
@@ -37,3 +37,18 @@
 35: goto 1   # <-- pt2. when a = 1, we start with a much larger value of f
              # namely: 10551367
 
+--- The loop take the form:
+
+    while (b = 1; b <= f; b++) {
+      while (e = 1; e <= f; e++) {
+03:     c = b * e
+        if (c == f) {
+          a += b
+        }
+      }
+    }
+
+-- or in English, it is sum of all the factors of f, but only counting them once
+for each value of e
+  so 20 x 5 = 20 + 5 (b = 20, e = 5 and b = 5, e = 20)
+  but 10 x 10 = 10   (only b = 10, e = 10)
