@@ -19,6 +19,7 @@ import           System.Environment
 import           System.Exit
 import           Text.Parser.Char
 import           Text.Parser.Combinators (choice, sepBy1)
+import Text.Printf
 
 type Memory = UA.UArray Int Int
 
@@ -161,35 +162,57 @@ main :: IO ()
 main = do
   args <- getArgs
   case args of
-    ["pt1"]  -> run newMemory
-    ["pt2"]  -> run (newMemory & ix 0 .~ 1)
+    ["pt1"]  -> prg >>= print . runProgramme newMemory
+    ["pt2"]  -> prg >>= print . runProgramme (newMemory & ix 0 .~ 1)
+    ["symbolise"] -> prg >>= putStrLn . symbolicly
     ["test"] -> do let (Right prg) = parseOnly inputP exampleInput
-                       ret = UA.elems (runProgramme prg newMemory)
+                       ret = UA.elems (runProgramme newMemory prg)
                    if ret == [6, 5, 6, 0, 0, 9]
                       then putStrLn "OK"
                       else die $ "FAIL: " ++ show ret
     _       -> die $ "Bad arguments : " ++ show args
   where
-    run mem = do
+    prg = do
       einp <- parseOnly inputP <$> Text.getContents
-      case einp of
-        Left err  -> die err
-        Right prg -> print $ runProgramme prg mem
+      either die pure einp
 
 newMemory :: Memory
 newMemory = UA.listArray (0,5) (repeat 0)
 
-runProgramme :: Input -> Memory -> Memory
-runProgramme input mem = SA.runSTUArray (SA.thaw mem >>= run . ActiveMemory)
+runProgramme :: Memory -> Input -> Memory
+runProgramme mem Input{..} = SA.runSTUArray (SA.thaw mem >>= run . ActiveMemory)
   where
-    ipReg    = instructionPtr input
-    instrs   = programme input
-
-    run m = let go ip = case instrs ^? ix ip of
+    run m = let go ip = case programme ^? ix ip of
                           Nothing -> return (activeMemory m)
-                          Just op -> do writeRegister m ipReg ip
+                          Just op -> do writeRegister m instructionPtr ip
                                         eval op m
-                                        ip' <- readRegister ipReg m
+                                        ip' <- readRegister instructionPtr m
                                         go (1 + ip')
              in go 0
 
+--- helper to make instructions more intelligible for reverse engineering
+symbolicly :: Input -> String
+symbolicly Input{..} = unlines $ ("#ip " ++ symbol instructionPtr)
+                               : fmap instr (A.assocs programme)
+  where
+    symbol (Register i) = pure $ toEnum (fromEnum 'a' + i)
+    instr (addr, bc) = printf "%02d: " addr ++ symbolise bc
+    symbolise IAnyOperator{opCode = Set, valA = i, retReg = r} | r == instructionPtr = "goto " ++ show (i + 1)
+    symbolise bc | retReg bc == instructionPtr = "goto " ++ bcSym bc
+    symbolise bc = symbol (retReg bc) ++ " = " ++ bcSym bc
+
+    bcSym RROperator{..} = unwords [symbol regA, op opCode, symbol regB]
+    bcSym RIOperator{..} = unwords [symbol regA, op opCode, show valB]
+    bcSym IROperator{..} = unwords [show valA, op opCode, symbol regB]
+    bcSym IAnyOperator{..} = unwords [op opCode, show valA]
+
+    op Add  = "+"
+    op Mul  = "*"
+    op Band = "&"
+    op Bor  = "|"
+    op Set  = ""
+    op Gtr  = ">"
+    op Equ  = "=="
+    
+
+                    
