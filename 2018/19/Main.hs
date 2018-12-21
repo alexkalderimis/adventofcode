@@ -10,6 +10,7 @@ import qualified Data.Array              as A
 import           Data.Array.Base         (unsafeRead, unsafeWrite)
 import qualified Data.Array.ST           as SA
 import qualified Data.Array.Unboxed      as UA
+import qualified Data.Set as S
 import           Data.Attoparsec.Text    (Parser, parseOnly)
 import           Data.Bits
 import           Data.Bool
@@ -19,9 +20,10 @@ import qualified Data.Text.IO            as Text
 import           System.Environment
 import           System.Exit
 import           Text.Parser.Char
-import           Text.Parser.Combinators (choice, sepBy1)
+import           Text.Parser.Combinators (eof, choice, sepBy1)
 import Text.Printf
 
+type BreakPoint = Int
 type Memory = UA.UArray Int Int
 
 newtype Register = Register Int deriving (Show, Eq)
@@ -35,6 +37,23 @@ readRegister (Register i) (ActiveMemory m) = unsafeRead m i
 
 writeRegister :: ActiveMemory s -> Register -> Int -> ST s ()
 writeRegister (ActiveMemory m) (Register i) v = unsafeWrite m i v
+
+data DebugCommand = SetReg Register Int
+                  | Quit
+                  | DumpMemory
+                  | NoCommand
+                  | Continue
+                  deriving (Show, Eq)
+
+commandP :: Parser DebugCommand
+commandP = choice [Quit <$ string ":q"
+                  ,DumpMemory <$ string ":d"
+                  ,Continue <$ string ":c"
+                  ,SetReg <$> namedReg <*> (string " = " *> intP)
+                  ,NoCommand <$ eof
+                  ]
+  where
+    namedReg = choice [Register i <$ char c | (i,c) <- zip [0 ..] "abcde"]
 
 -- we avoid illegal register access by guaranteeing that register
 -- access is legal at parse-time.
@@ -201,21 +220,56 @@ runProgramme mem Input{..} = SA.runSTUArray (SA.thaw mem >>= run . ActiveMemory)
                                         go (1 + ip')
              in go (fst $ A.bounds programme) -- start at first instruction
 
+dumpMemory :: Memory -> IO ()
+dumpMemory = mapM_ putStrLn . fmap showBinding . UA.assocs
+  where
+    showBinding (reg, val) = unwords [pure (toEnum $ fromEnum 'a' + reg), "=", show val]
+
+runProgrammeWithBreakPoints :: S.Set BreakPoint -> Memory -> Input -> IO Memory
+runProgrammeWithBreakPoints breaks mem inp = go mem 0
+  where
+    (Register ip) = instructionPtr inp
+
+    go m instr | S.member instr breaks = do
+      putStrLn $ "at: " ++ show instr
+      dumpMemory m
+      breakPoint m instr
+
+    go m instr | not (A.inRange (A.bounds (programme inp)) instr) = pure m
+
+    go m instr = run m instr
+
+    breakPoint m instr = do
+      ec <- parseOnly commandP <$> Text.getLine
+      case ec of
+        Left err -> putStrLn err >> breakPoint m instr
+        Right c -> case c of
+                     Quit -> return m
+                     NoCommand -> breakPoint m instr
+                     Continue -> run m instr
+                     DumpMemory -> dumpMemory m >> breakPoint m instr
+                     SetReg (Register i) v -> breakPoint (m UA.// [(i,v)]) instr
+
+    run m instr = do
+      let subp = subProgramme (instr,instr) inp
+          m'   = runProgramme m subp 
+      go m' (1 + m' UA.! ip)
+
 --- helper to make instructions more intelligible for reverse engineering
 symbolicly :: Input -> String
-symbolicly Input{..} = unlines $ ("#ip " ++ symbol instructionPtr)
-                               : fmap instr (A.assocs programme)
+symbolicly Input{..} = unlines $ fmap instr (A.assocs programme)
   where
-    symbol (Register i) = pure $ toEnum (fromEnum 'a' + i)
-    instr (addr, bc) = printf "%02d: " addr ++ symbolise bc
-    symbolise IAnyOperator{opCode = Set, valA = i, retReg = r} | r == instructionPtr = "goto " ++ show (i + 1)
-    symbolise bc | retReg bc == instructionPtr = "goto " ++ bcSym bc
-    symbolise bc = symbol (retReg bc) ++ " = " ++ bcSym bc
+    symbol addr r | r == instructionPtr = show addr
+    symbol _    (Register i)            = pure $ toEnum (fromEnum 'a' + i)
+    instr (addr, bc) = printf "%02d: " addr ++ symbolise addr bc
+    symbolise _    IAnyOperator{opCode = Set, valA = i, retReg = r} | r == instructionPtr = "goto " ++ show (i + 1)
+    symbolise addr bc | retReg bc == instructionPtr = "goto 1 + " ++ bcSym addr bc
+    symbolise addr bc = symbol addr (retReg bc) ++ " = " ++ bcSym addr bc
 
-    bcSym RROperator{..} = unwords [symbol regA, op opCode, symbol regB]
-    bcSym RIOperator{..} = unwords [symbol regA, op opCode, show valB]
-    bcSym IROperator{..} = unwords [show valA, op opCode, symbol regB]
-    bcSym IAnyOperator{..} = unwords [op opCode, show valA]
+    bcSym a RROperator{..} = unwords [symbol a regA, op opCode, symbol a regB]
+    bcSym a RIOperator{..} = unwords [symbol a regA, op opCode, show valB]
+    bcSym a IROperator{..} = unwords [show valA, op opCode, symbol a regB]
+    bcSym _ IAnyOperator{..} = unwords [op opCode, show valA]
 
     op Add  = "+"
     op Mul  = "*"
