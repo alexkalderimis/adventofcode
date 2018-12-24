@@ -11,6 +11,7 @@ import           Data.Array.Base         (unsafeRead, unsafeWrite)
 import qualified Data.Array.ST           as SA
 import qualified Data.Array.Unboxed      as UA
 import qualified Data.Set as S
+import qualified Data.Map.Strict as M
 import           Data.Attoparsec.Text    (Parser, parseOnly)
 import           Data.Bits
 import           Data.Bool
@@ -221,21 +222,42 @@ runProgramme mem Input{..} = SA.runSTUArray (SA.thaw mem >>= run . ActiveMemory)
              in go (fst $ A.bounds programme) -- start at first instruction
 
 dumpMemory :: Memory -> IO ()
-dumpMemory = mapM_ putStrLn . fmap showBinding . UA.assocs
-  where
-    showBinding (reg, val) = unwords [pure (toEnum $ fromEnum 'a' + reg), "=", show val]
+dumpMemory = mapM_ putStrLn . fmap (uncurry showBinding) . UA.assocs
 
-runProgrammeWithBreakPoints :: S.Set BreakPoint -> Memory -> Input -> IO Memory
-runProgrammeWithBreakPoints breaks mem inp = go mem 0
+showBinding reg val = unwords [pure (toEnum $ fromEnum 'a' + reg), "=", show val]
+
+data Observations = Observations
+  { breakpoints :: S.Set BreakPoint
+  , observed    :: M.Map BreakPoint Register
+  , termination :: M.Map BreakPoint (Register, (Int -> Bool))
+  }
+
+breakPoint b = Observations (S.singleton b) mempty mempty
+
+breaks i = S.member i . breakpoints
+observe i = M.lookup i . observed
+
+terminate :: Int -> Memory -> Observations -> Bool
+terminate i m os = case M.lookup i (termination os) of
+                     Nothing -> False
+                     Just (Register i, f) -> f (m UA.! i)
+
+runProgrammeWithBreakPoints :: Observations -> Memory -> Input -> IO Memory
+runProgrammeWithBreakPoints o mem inp = go mem 0
   where
     (Register ip) = instructionPtr inp
 
-    go m instr | S.member instr breaks = do
+    go m instr | breaks instr o = do
       putStrLn $ "at: " ++ show instr
       dumpMemory m
       breakPoint m instr
 
-    go m instr | not (A.inRange (A.bounds (programme inp)) instr) = pure m
+    go m instr | terminate instr m o = pure m
+
+    go m instr | Just (Register i) <- observe instr o = do
+      putStrLn $ "at: " ++ show instr
+      putStrLn $ showBinding i (m UA.! i)
+      run m instr
 
     go m instr = run m instr
 
@@ -250,6 +272,7 @@ runProgrammeWithBreakPoints breaks mem inp = go mem 0
                      DumpMemory -> dumpMemory m >> breakPoint m instr
                      SetReg (Register i) v -> breakPoint (m UA.// [(i,v)]) instr
 
+    run m instr | not (A.inRange (A.bounds (programme inp)) instr) = pure m
     run m instr = do
       let subp = subProgramme (instr,instr) inp
           m'   = runProgramme m subp 

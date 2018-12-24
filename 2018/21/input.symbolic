@@ -1,0 +1,32 @@
+00: e =  123          <-- begin sanity check
+01: e = e & 456
+02: e = e == 72
+03: goto 1 + e + 3 
+04: goto 1            <-- end-sanity check
+05: e =  0            <-  begin code
+06: f = e | 65536
+07: e =  1855046
+08: c = f & 255
+09: e = e + c
+10: e = e & 16777215
+11: e = e * 65899
+12: e = e & 16777215
+13: c = 256 > f
+14: goto 16 if c
+15: goto 17
+16: goto 28
+17: c =  0
+18: b = c + 1
+19: b = b * 256
+20: b = b > f
+21: goto 1 + b + 21
+22: goto 24
+23: goto 26
+24: c = c + 1
+25: goto 18
+26: f = c
+27: goto 8
+28: c = e == a
+29: goto 1 + c + 29
+30: goto 6
+

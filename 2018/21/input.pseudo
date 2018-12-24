@@ -1,0 +1,72 @@
+// 00 ..  04
+if (123 & 456 != 72) {
+  for (;;) {}
+}
+
+// 05 .. 13
+e = 0
+INIT:
+  f = e | 65536        // no-op when e = 0: int->int coerce, f = 65536
+  e =  1855046         
+INIT2:
+  c = f & 255            // on iter 1: 65536 & 255: same as c = 0
+  e += c                 // no-op. same as e = 1855046
+  e = e & 16777215       // no-op. same as e = 1855046
+  e *= 65899             // same as e = 122245676354
+  e = e & 16777215       // same as e = 6880578
+
+// at this point on first iteration:
+// [(a = 0),(b = 0),(c = 0),(e = 6880578),(f = 65536)]
+
+
+if (256 > f) {      // <-- this must be true, so f must be < 256
+  if (e == a) {     // <-- this must be true, so a should be e
+    HALT
+  } else {
+    goto INIT
+  }
+} else {
+  17: c = 0
+
+  18: b = c + 1
+  19: b = b * 256
+  if (b > f) { // on first iteration: (256 > 65536)
+    // goto 23 > goto 26
+    26: f = c
+    27: goto INIT2
+  } else {
+    // goto 24
+    24: c = c + 1
+    25: goto 18
+  }
+}
+
+//--------------------------------------------
+
+c = 0
+// values of e:
+init2() {
+  c = f & 255            
+  e += c                
+  e = e & 16777215     
+  e *= 65899          
+  e = e & 16777215   
+}
+for (e = 0;;) {
+  f = e | 65536
+  e = 1855046
+  init2()
+  while (256 <= f) {
+    c = 0
+    b = 256
+    while (b <= f) {
+      c++
+      b = c + 1
+      b = b * 256
+    }
+    f = c
+    init2()
+  }
+  print e
+}
+
