@@ -8,7 +8,6 @@ import           Data.Attoparsec.Text        (Parser, parseOnly)
 import qualified Data.List                   as L
 import           Data.Ord
 import qualified Data.Set                    as S
-import qualified Data.Map.Strict as M
 import qualified Data.Text                   as Text
 import qualified Data.Text.IO                as Text
 import           System.Exit
@@ -52,9 +51,9 @@ partTwo ns = search 0 bounds ns
 search :: Int -> (Coord, Coord) -> [Nanobot] -> Coord
 search scale bounds ns
   | rs < 0 || rs > 100000 = search (scale + 1) bounds ns -- search space too big! Scale down first
-  | otherwise             = Debug.traceShow (scale, bounds, scaledBounds) (
+  | otherwise             = -- Debug.traceShow (scale, bounds, scaledBounds) (
                               unscale scale . fst . L.maximumBy (comparing sort) $ counted
-                            )
+                            -- )
   where
     sort (c,n) = (n, Down (distance (0,0,0) c))
     rs = let ((x,y,z),(x',y',z')) = scaledBounds
@@ -63,15 +62,16 @@ search scale bounds ns
                     -- the exercise results are off by one when using 10, and correct when using 2
                     -- but the exampleHuge is only correct when using 2...
                     -- So this is at best a work in progress.
+                    -- TODO: find a general solution!
 
     scaledBounds = (all3 div (fst bounds) (f,f,f), all3 div (snd bounds) (f,f,f))
     scaledBots = fmap (\b -> Nanobot (all3 div (position b) (f,f,f)) (signalStrength b `div` f)) ns
     nReachable c = length [() | b <- scaledBots , distance c (position b) <= signalStrength b]
 
     unscale 0 pos = pos
-    unscale n (x,y,z) = Debug.traceShow ("FOUND", x,y,z) (
+    unscale n (x,y,z) = -- Debug.traceShow ("FOUND", x,y,z) (
                           search (scale - 1) ((pred x * f, pred y * f, pred z * f), (succ x * f, succ y * f, succ z * f)) ns
-                        )
+                        -- )
 
     counted = let ((x,y,z),(x',y',z')) = scaledBounds
                   cs = [(a,b,c) | a <- [x .. x'], b <- [y .. y'], c <- [z .. z']]
