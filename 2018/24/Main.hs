@@ -1,36 +1,37 @@
+{-# LANGUAGE DeriveFunctor     #-}
+{-# LANGUAGE MultiWayIf        #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE DeriveFunctor #-}
-{-# LANGUAGE TemplateHaskell #-}
-{-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE RecordWildCards   #-}
+{-# LANGUAGE TemplateHaskell   #-}
 
 import           Elves
 import           Elves.Advent
 
-import Data.Ord
-import Data.Tuple (swap)
-import Data.Monoid
-import Control.Applicative
-import Text.Parser.Char (letter, space, newline, text)
-import Text.Parser.Token (decimal, comma)
-import Text.Parser.Combinators (choice, between, sepBy1, sepEndBy1)
-import Data.Attoparsec.Text ((<?>), takeText)
-import Data.Attoparsec.Combinator (lookAhead)
-import Control.Lens
-import qualified Data.List as L
-import Control.Lens.Combinators (sumOf)
-import Control.Monad.State.Strict
-import Control.Lens.TH
-import Data.Maybe
-import           Data.Set     (Set)
-import qualified Data.Set as S
-import           Data.Map.Strict (Map)
-import qualified Data.Map.Strict as M
-import           Data.Text    (Text)
-import qualified Data.Text as Text
+import           Control.Applicative
+import           Control.Lens
+import           Control.Lens.Combinators   (sumOf)
+import           Control.Lens.TH
+import           Control.Monad.State.Strict
+import           Data.Attoparsec.Combinator (lookAhead)
+import           Data.Attoparsec.Text       (takeText, (<?>))
+import qualified Data.List                  as L
+import           Data.Map.Strict            (Map)
+import qualified Data.Map.Strict            as M
+import           Data.Maybe
+import           Data.Monoid
+import           Data.Ord
+import           Data.Set                   (Set)
+import qualified Data.Set                   as S
+import           Data.Text                  (Text)
+import qualified Data.Text                  as Text
+import           Data.Tuple                 (swap)
+import           Text.Parser.Char           (letter, newline, space, text)
+import           Text.Parser.Combinators    (between, choice, sepBy1, sepEndBy1)
+import           Text.Parser.Token          (comma, decimal)
 
-import qualified Debug.Trace as Debug
+import qualified Debug.Trace                as Debug
 
-data Side = ImmuneSystem | Infection deriving (Show, Eq, Ord)
+data Side = Stalemate Int | Draw | ImmuneSystem | Infection deriving (Show, Eq, Ord)
 
 data Group = Group
   { _groupSize       :: Int
@@ -62,6 +63,16 @@ data Attack = Attack { attacking :: Side , attackerId :: GroupId, defenderId :: 
 main :: IO ()
 main = day 24 inputP pt1 pt2 test
 
+pt1 inp = do
+  let (side,s) = runState battle inp
+  putStrLn $ "Victor: " ++ show side
+  putStrLn $ "with " ++ show (units s) ++ " units"
+
+pt2 inp = do
+  let bst = minimalBoost inp
+  putStrLn $ "Minimal boost: " ++ show bst
+  pt1 (boost bst inp)
+
 inputP :: Parser Input
 inputP = Input <$>             (header "Immune System" *> armyP <?> "immune-army")
                <*> (armySep *> (header "Infection"     *> armyP <?> "infection-army"))
@@ -75,21 +86,40 @@ inputP = Input <$>             (header "Immune System" *> armyP <?> "immune-army
 
 battle :: State Input Side
 battle = do
+  s <- get
   fight
+  s' <- get
   dead <- gets (fmap M.null)
   case dead of
-    (Input True True) -> error "impossible"
-    (Input True False) -> pure Infection
-    (Input False True) -> pure ImmuneSystem
-    (Input False False) -> battle
+      (Input True True)   -> pure Draw
+      (Input True False)  -> pure Infection
+      (Input False True)  -> pure ImmuneSystem
+      (Input False False) -> if s == s' then pure (Stalemate (units s)) else battle
 
 fight :: State Input ()
-fight = do
-  selections <- selectTargets
-  mapM_ performAttack selections
+fight = selectTargets >>= mapM_ performAttack
 
 boost :: Int -> Input -> Input
 boost b = immuneSystem %~ M.map (groupAttack._1 +~ b)
+
+-- use binary search to find the minimum boost
+minimalBoost :: Input -> Int
+minimalBoost inp = go (0, maxBoost)
+  where
+    go rng | rngSize rng < 2 = fst rng
+           | otherwise = let p = mid rng
+                             v = victorWithBoost p
+                             rng' = if v == ImmuneSystem
+                                      then (fst rng, p)
+                                      else (p + 1, snd rng)
+                          in go rng'
+    -- a boost that will allow any group to one-shot any any enemy
+    maxBoost = maximum $ fmap ((*) <$> view groupHP <*> view groupSize)
+                       $ M.elems
+                       $ inp ^. infection
+    victorWithBoost b = evalState battle (boost b inp)
+    rngSize (a,b) = (b - a) + 1
+    mid rng = let n = rngSize rng in fst rng + (div n 2 - if even n then 1 else 0)
 
 selectTargets :: State Input [Attack]
 selectTargets = fmap (fmap snd . L.sortBy (comparing (Down . fst)) . catMaybes) $ do
@@ -127,10 +157,10 @@ selectTarget side grp = do
              pure (Just e)
 
 opponents ImmuneSystem = infection
-opponents Infection = immuneSystem
+opponents Infection    = immuneSystem
 
 allies ImmuneSystem = immuneSystem
-allies Infection = infection
+allies Infection    = infection
 
 damageCausedBy :: Group -> Group -> Int
 damageCausedBy attacker defender
@@ -148,10 +178,9 @@ performAttack Attack{..} = do
   case (mattacker, mdefender) of
     (Just attacker, Just defender) -> do
       let losses = damageCausedBy attacker defender `div` defender ^. groupHP
-          defender' = defender & groupSize -~ losses
-      opponents attacking #%= if (defender' ^. groupSize > 0)
-                              then M.insert defenderId defender'
-                              else M.delete defenderId
+      opponents attacking #%= if | losses == 0                     -> id
+                                 | losses >= defender ^. groupSize -> M.delete defenderId
+                                 | otherwise -> M.insert defenderId (defender & groupSize -~ losses)
     _ -> pure ()
 
 groupP :: Parser Group
@@ -162,7 +191,7 @@ groupP = do
 
   attack <- text " with an attack that does " *> attackP <* text " damage"
   init <- text " at initiative " *> int
-  return $ Group n hp attack init imm weak 
+  return $ Group n hp attack init imm weak
  where
     bracketed = between (text " (") (text ")")
 
@@ -179,16 +208,9 @@ groupP = do
                                , (,) mempty <$> characteristic "weak"
                                , (,) <$> characteristic "immune" <*> pure mempty
                                ]
-                               
+
     defaulting x = fmap (fromMaybe x) . optional
     pair a b = (,) <$> (a <* text "; ") <*> b
-
-pt1 inp = do
-  let (side,s) = runState battle inp
-  putStrLn $ "Victor: " ++ show side
-  putStrLn $ "with " ++ show (units s) ++ " units"
-
-pt2 _ = print "not implemented"
 
 units = let u fld = sumOf (folded.groupSize) . view fld
          in (+) <$> u immuneSystem <*> u infection
@@ -202,7 +224,7 @@ test = do
                     , _groupInitiative = 3
                     , _groupAttack = (13, "")
                     }
-      
+
   describe "effectivePower" $ do
     it "is the product of unit strength and attack damage" $ do
       let g = group & groupSize .~ 18
@@ -223,7 +245,7 @@ test = do
           s = input [] [group]
           ret = execState (performAttack (Attack ImmuneSystem 1 1)) s
       ret `shouldBe` s
-      
+
   describe "selectTargets" $ do
     it "selects the correct groups to attack" $ do
       let (Right inp) = parseOnly inputP exampleInput
@@ -254,6 +276,16 @@ test = do
           defender = group & groupImmunities %~ S.insert "radiation"
           mdefender = evalState (selectTarget ImmuneSystem attacker) (input [attacker] [defender])
       mdefender `shouldBe` Nothing
+
+  describe "minimalBoost" $ do
+    let (Right inp) = parseOnly inputP exampleInput
+        mb = minimalBoost inp
+    it "it is at most the example value given" $ do
+      mb <= 1570 `shouldBe` True
+    it "can find a minimal boost that makes sure the immune system wins" $ do
+      evalState battle (boost mb inp) `shouldBe` ImmuneSystem
+    it "it is the minimum boost needed" $ do
+      evalState battle (boost (mb - 1) inp) `shouldBe` Infection
 
   describe "boost" $ do
     it "runs the boosted battle correctly" $ do
@@ -354,13 +386,13 @@ exampleInput = Text.unlines
   ]
 
 groupA, groupB, groupC, groupD :: Text
-groupA = 
+groupA =
    "17 units each with 5390 hit points (weak to radiation, bludgeoning) with"
    <> " an attack that does 4507 fire damage at initiative 2"
-groupB = 
+groupB =
    "989 units each with 1274 hit points (immune to fire; weak to bludgeoning,"
    <> " slashing) with an attack that does 25 slashing damage at initiative 3"
-groupC = 
+groupC =
    "801 units each with 4706 hit points (weak to radiation) with an attack"
    <> " that does 116 bludgeoning damage at initiative 1"
 groupD =
