@@ -88,6 +88,9 @@ fight = do
   selections <- selectTargets
   mapM_ performAttack selections
 
+boost :: Int -> Input -> Input
+boost b = immuneSystem %~ M.map (groupAttack._1 +~ b)
+
 selectTargets :: State Input [Attack]
 selectTargets = fmap (fmap snd . L.sortBy (comparing (Down . fst)) . catMaybes) $ do
   getAttackers >>= locally . mapM (\(side, (gid, g)) -> do
@@ -252,6 +255,11 @@ test = do
           mdefender = evalState (selectTarget ImmuneSystem attacker) (input [attacker] [defender])
       mdefender `shouldBe` Nothing
 
+  describe "boost" $ do
+    it "runs the boosted battle correctly" $ do
+      let (Right inp) = parseOnly inputP exampleInput
+          (victor,s) = runState battle (boost 1570 inp)
+      (victor, units s) `shouldBe` (ImmuneSystem, 51)
   describe "battle" $ do
     it "predicts victory for the infection in the example battle" $ do
       let (Right inp) = parseOnly inputP exampleInput
@@ -305,7 +313,17 @@ test = do
                     }
       it "parses correctly" $ do
         parseOnly groupP t `shouldBe` Right g
-
+    describe "group without characteristics" $ do
+      let t = "949 units each with 3117 hit points with an attack that does 29 fire damage at initiative 10"
+      let g = Group { _groupSize = 949
+                    , _groupHP = 3117
+                    , _groupWeaknesses = mempty
+                    , _groupImmunities = mempty
+                    , _groupInitiative = 10
+                    , _groupAttack = (29, "fire")
+                    }
+      it "parses correctly" $ do
+        parseOnly groupP t `shouldBe` Right g
     describe "groupA" $ do
       let expected = Group 17 5390 (4507, "fire") 2 mempty
                            (S.fromList ["radiation", "bludgeoning"])
