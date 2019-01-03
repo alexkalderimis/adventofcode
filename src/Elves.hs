@@ -2,13 +2,17 @@ module Elves (
   pairs,
   getMatrix,
   minimalBinarySearch,
-  module Hspec,
-  module Attoparsec
+  (<#>),
+  module X
   ) where
 
+import Control.Applicative as X
 import Data.List
-import Test.Hspec as Hspec
-import Data.Attoparsec.Text as Attoparsec (Parser, parseOnly)
+import Test.Hspec as X
+import Data.Attoparsec.Text as X (Parser, parseOnly)
+
+(<#>) :: Applicative f => f a -> f b -> f (a,b)
+fa <#> fb = liftA2 (,) fa fb
 
 pairs :: [a] -> [(a, a)]
 pairs l = [(x,y) | (x:ys) <- tails l, y <- ys]

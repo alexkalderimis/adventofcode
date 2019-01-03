@@ -9,7 +9,7 @@ import           Elves.Advent
 
 import Control.Monad.Trans.Maybe
 import           Control.Applicative
-import           Control.Lens hiding (element)
+import           Control.Lens hiding (element, elements)
 import           Control.Lens.Combinators   (sumOf)
 import           Control.Lens.TH
 import           Control.Monad.State.Strict
@@ -30,6 +30,7 @@ import           Data.Tuple                 (swap)
 import           Text.Parser.Char           (newline, space, text)
 import           Text.Parser.Combinators    (between, choice, sepBy1, sepEndBy1)
 import           Text.Parser.Token          (comma)
+import Test.QuickCheck
 
 -- import qualified Debug.Trace                as Debug
 
@@ -43,6 +44,21 @@ data Group = Group
   , _groupImmunities :: Set Text
   , _groupWeaknesses :: Set Text
   } deriving (Show, Eq, Ord)
+
+instance Arbitrary Group where
+  arbitrary = Group <$> int 10000
+                    <*> int 100000
+                    <*> (int 500 <#> arbitraryElement)
+                    <*> int 1000
+                    <*> arbitraryElementSet
+                    <*> arbitraryElementSet
+                where
+                  int mv = scale (min mv) arbitrarySizedNatural
+                  arbitraryElementSet = int 10 >>= \n -> (S.fromList <$> vectorOf n arbitraryElement)
+                  arbitraryElement = elements ["frost", "slashing", "acid", "fire", "ice", "bludgeoning", "slashing"
+                                              ,"poison", "cold", "radiation", "heat", "psychic", "corrosive"
+                                              ,"shock", "necrotic", "piercing", "lightning", "radiant"
+                                              ]
 
 makeLenses ''Group
 
@@ -277,6 +293,18 @@ test = do
                           ,Attack Infection 1 1
                           ]
 
+    it "ensures that each group has selected zero or one groups to attack, and each group is being attacked by zero or one groups." $
+       property $ \goodies baddies ->
+         let s = input goodies baddies
+             maxGoodId = length goodies
+             maxBadId = length baddies
+             attacks = evalState selectTargets s
+             inRange x (lb,ub) = lb <= x && x <= ub
+          in    and [attackerId `inRange` (0,maxGoodId) && defenderId `inRange` (0,maxBadId) | Attack{attacking = ImmuneSystem, ..} <- attacks]
+             && and [attackerId `inRange` (0,maxBadId) && defenderId `inRange` (0,maxGoodId) | Attack{attacking = Infection, ..} <- attacks]
+             && and [ n == 1 | n <- M.elems $ M.fromListWith (+) [((attacking, attackerId), 1) | Attack{..} <- attacks] ]
+             && and [ n == 1 | n <- M.elems $ M.fromListWith (+) [((attacking, defenderId), 1) | Attack{..} <- attacks] ]
+
   describe "selectTarget" $ do
     it "selects the correct group for group-D to attack" $ do
       let (Right inp) = parseOnly inputP exampleInput
@@ -330,9 +358,9 @@ test = do
           medInit  = groupInitiative .~ 20
           lowInit  = groupInitiative .~ 10
 
-          ds = [group & susceptibility & strength & init | susceptibility <- [immune,   susceptible, neither ]
-                                                         , strength       <- [strong,   medium,      weak    ]
-                                                         , init           <- [lowInit,  medInit,     highInit]
+          ds = [group & a.b.c | a <- [immune,   susceptible, neither ]
+                              , b <- [strong,   medium,      weak    ]
+                              , c <- [lowInit,  medInit,     highInit]
                ]
           mdefender = evalState (selectTarget ImmuneSystem attacker) (input [attacker] ds)
           di = L.elemIndex (susceptible . strong . highInit $ group) ds
@@ -374,12 +402,14 @@ test = do
                             ,Input [8,905] [466,4453]
                             ,Input [876] [160,4453]
                             ]
-      res `shouldContain` [Input [64] [19,214]
-                          ,Input [60] [19,182]
-                          ,Input [60] [182]
-                          ,Input [57] [152]
-                          ]
-      res `shouldEndWith` [ Input [51] [40] ,Input [51] [13] ]
+      res `shouldContain`   [Input [64] [19,214]
+                            ,Input [60] [19,182]
+                            ,Input [60] [182]
+                            ,Input [57] [152]
+                            ]
+      res `shouldEndWith`   [Input [51] [40]
+                            ,Input [51] [13]
+                            ]
 
   describe "battle" $ do
     it "predicts victory for the infection in the example battle" $ do
