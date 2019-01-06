@@ -1,2 +1,6 @@
+import Test.HSpec
+
+import qualified ElvesSpec as ES
+
 main :: IO ()
-main = putStrLn "Test suite not yet implemented"
+main = hspec (describe "elves" ES.spec)
