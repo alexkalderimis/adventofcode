@@ -9,10 +9,11 @@ module Elves.RTree where
 import Data.Ord
 import qualified Data.List.NonEmpty as NE
 import           Data.List.NonEmpty (NonEmpty)
-import           Control.Lens hiding (contains)
+import           Control.Lens hiding (contains, index)
 import qualified Data.List as L
 import           Data.Ix      (Ix)
 import qualified Data.Ix      as Ix
+import Test.QuickCheck.Arbitrary (Arbitrary(arbitrary))
 
 type Accessor a b = ReifiedLens a a b b
 
@@ -44,6 +45,9 @@ instance (Integral a, Integral b, Integral c, Integral d) => Coord (a,b,c,d) whe
 data RTree i a = Tip | Leaf i a | Region (i,i) [RTree i a]
              deriving (Show, Eq)
 
+instance (Arbitrary i, Arbitrary a, Ix i, Coord i) => Arbitrary (RTree i a) where
+  arbitrary = fmap index arbitrary
+
 bounds :: RTree i a -> (i,i)
 bounds (Leaf i _) = (i,i)
 bounds (Region b _) = b
@@ -52,34 +56,51 @@ bounds Tip = error "no bounds of empty tree"
 maxPageSize :: Int
 maxPageSize = 10 -- tuneable page size
 
+size :: RTree i a -> Int
+size Tip = 0
+size Leaf{} = 1
+size (Region _ ts) = sum (size <$> ts)
+
 index :: (Ix i, Coord i) => [(i, a)] -> RTree i a
 index = go 0
   where
     boundify (i:is) = L.foldl' (\b i -> expand i b) (i,i) is
     go _ [] = Tip
-    go dim xs | length xs <= maxPageSize = Region (boundify (fst <$> xs)) (uncurry Leaf <$> xs)
-    go dim xs = let ds = dimensions
-                    order = view $ runLens (ds !! (dim `mod` length ds))
-                    (ls,rs) = L.splitAt (length xs `div` 2) (L.sortBy (comparing (order . fst)) xs)
-                    l = go (dim + 1) ls
-                    r = go (dim + 1) rs
-                 in Region (expandB (bounds l) (bounds r)) [l,r]
+    go dim xs
+      | n <= maxPageSize = Region (boundify (fst <$> xs)) (uncurry Leaf <$> xs)
+      | otherwise = let ds = dimensions
+                        order = view $ runLens (ds !! (dim `mod` length ds))
+                        chunk = n `div` (maxPageSize `div` 2)
+                        ts = go (dim + 1) <$> chunksOf chunk (L.sortBy (comparing (order.fst)) xs)
+                        bs = L.foldl1 expandB (bounds <$> ts)
+                     in Region bs ts
+        where n = length xs
 
-insert :: (Ix i, Coord i) => RTree i a -> RTree i a -> RTree i a
-insert left Tip  = left
-insert Tip right = right
-insert left right | contains right left = insert right left
-insert left right = case right of
+chunksOf :: Int -> [a] -> [[a]]
+chunksOf _ [] = []
+chunksOf n xs = let (as,bs) = L.splitAt n xs in as : chunksOf n bs
+
+insert :: (Ix i, Coord i) => i -> a -> RTree i a -> RTree i a
+insert i a = insertT (Leaf i a)
+
+insertT :: (Ix i, Coord i) => RTree i a -> RTree i a -> RTree i a
+insertT left Tip  = left
+insertT Tip right = right
+insertT left right | contains left right = insertT right left
+insertT left right = case right of
   (Leaf i _)     -> Region (expand i $ bounds left) [left,right]
   (Region bs ts) -> Region (let (i,j) = bounds left in expand i . expand j $ bounds right)
                            (insertChild left ts)
 
 insertChild :: (Ix i, Coord i) => RTree i a -> [RTree i a] -> [RTree i a]
-insertChild t ts | length ts < maxPageSize = t : ts
+insertChild t ts | length ts < maxPageSize =
+  case L.partition (`contains` t) ts of
+    ([],_) -> t : ts
+    ((parent:ps), ts') -> insertT t parent : ps ++ ts'
 insertChild t ts = let (best:rest) = L.sortBy (comparing (sizeWith t)) ts
-                       new = insert t best
+                       new = insertT t best
                        (inside,outside) = L.partition (overlaps (bounds new) . bounds) rest
-                    in (L.foldl' (\parent child -> insert child parent) new inside : outside)
+                    in (L.foldl' (\parent child -> insertT child parent) new inside : outside)
 
 query :: (Ix i, Show i, Coord i) => (i,i) -> RTree i a -> [(i,a)]
 query q Tip = []
