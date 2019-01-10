@@ -27,9 +27,9 @@ pairs l = [(x,y) | (x:ys) <- tails l, y <- ys]
 getMatrix :: (Read a) => IO [[a]]
 getMatrix = fmap (fmap read . words) . lines <$> getContents
 
-minmax :: [Int] -> (Int, Int)
-minmax [] = error "minmax of empty list"
-minmax (x:xs) = foldl' (\(lb,ub) -> (,) <$> min lb <*> max ub) (x,x) xs
+minmax :: Ord a => [a] -> Maybe (a,a)
+minmax = foldl' (\mp x -> fmap (cmp x) mp <|> Just (x,x)) Nothing
+  where cmp x (a,b) = (min x a, max x b)
 
 -- like local in Reader - this allows a stateful
 -- action to run, and then have its modifications

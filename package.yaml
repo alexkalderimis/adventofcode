@@ -73,6 +73,8 @@ executables:
     - bytestring
     - lens
     - optparse-generic
+    - transformers
+    - parallel
 
 tests:
   adventofcode-test:
@@ -84,3 +86,9 @@ tests:
     - -with-rtsopts=-N
     dependencies:
     - adventofcode
+    - array
+    - hspec
+    - QuickCheck
+    - containers
+    - lens
+
