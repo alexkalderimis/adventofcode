@@ -86,15 +86,24 @@ spec = describe "Elves.RTree" $ do
   describe "overlaps" $ do
     it "knows that ranges that contain a common point overlap" $ property $ \(Cube a) (Cube b) ->
       overlaps a b == any (`within` b) [(p,p) | p <- Ix.range a ]
+    specify "is commutative" $ property $ \(Cube a) (Cube b) ->
+      overlaps a b == overlaps b a
 
     it "knows that (-3,-3,-3,-3),(3,3,3,3) overlaps (0,-4,0,0),(0,4,0,0)" $ do
       ((-3,-3,-3),(3,3,3)) `shouldSatisfy` overlaps ((0,-4,0),(0,4,0))
+    it "knows that (0,-4,0,0),(0,4,0,0) overlaps (-3,-3,-3,-3),(3,3,3,3)" $ do
+      ((0,-4,0),(0,4,0)) `shouldSatisfy` overlaps ((-3,-3,-3),(3,3,3))
 
   describe "within" $ do
     specify "all cubes that are within other cubes also overlap" $ property $ \(Cube a) (Cube b) ->
       if (a `within` b) then overlaps a b else True
     specify "all points in cube are entirely within it" $ property $ \(CubeWithPoint cube p) ->
       (p,p) `within` getCube cube
+
+    it "knows that (-3,-3,-3,-3),(3,3,3,3) is not within (0,-4,0,0),(0,4,0,0)" $ do
+      ((0,-4,0),(0,4,0)) `shouldNotSatisfy` within ((-3,-3,-3),(3,3,3))
+    it "knows that (0,-4,0,0),(0,4,0,0) is not within (-3,-3,-3,-3),(3,3,3,3)" $ do
+      ((-3,-3,-3),(3,3,3)) `shouldNotSatisfy` within ((0,-4,0),(0,4,0))
 
   describe "expandQuery" $ do
     it "always includes the query" $ property $ \(NonNegative n) q -> 
