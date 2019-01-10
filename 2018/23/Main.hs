@@ -2,6 +2,7 @@
 {-# LANGUAGE TupleSections     #-}
 
 import           Control.Applicative
+import           Control.Lens                (each, (%~), (&))
 import           Control.Monad
 import           Control.Parallel.Strategies
 import           Data.Attoparsec.Text        (Parser, parseOnly)
@@ -18,10 +19,12 @@ import           Text.Printf
 
 import qualified Debug.Trace                 as Debug
 
+type Distance = Int
 type Coord = (Int,Int,Int)
+type Region = (Coord, Coord)
 
 data Nanobot = Nanobot { position       :: Coord
-                       , signalStrength :: Int
+                       , signalStrength :: Distance
                        } deriving (Show, Ord, Eq)
 
 main :: IO ()
@@ -39,25 +42,29 @@ partOne ns = let b = L.maximumBy (comparing signalStrength) ns
               in S.fromList $ filter ((<= signalStrength b) . distance (position b) . position) ns
 
 -- There are too many co-ordinates (literally quadrillions of co-ordinates)
--- to scan exhaustively.  Instead we are going to need to do some larger scale indexing:
---   scale the bots until the search space is less than 100k
---   find an answer
---   scale up one notch and repeat, until we are back at a realistic scale
+-- to scan exhaustively.
+--   for the real input, should return:
+--     Part two: 34078718,27904352,23778473
+--     distance to point: 85761543
 partTwo :: [Nanobot] -> Coord
-partTwo ns = search 0 bounds ns
+partTwo ns = -- searchDividing ns bounds
+             searchScaling 0 bounds ns
   where
         bounds = minmax (position <$> ns)
 
-search :: Int -> (Coord, Coord) -> [Nanobot] -> Coord
-search scale bounds ns
-  | rs < 0 || rs > 100000 = search (scale + 1) bounds ns -- search space too big! Scale down first
+-- this works, but I'm not entirely sure why any more, since I can't
+-- come up with a fast general solution.
+--
+-- Still a work in progress.
+searchScaling :: Int -> (Coord, Coord) -> [Nanobot] -> Coord
+searchScaling scale bounds ns
+  | rs < 0 || rs > 100000 = searchScaling (scale + 1) bounds ns -- search space too big! Scale down first
   | otherwise             = -- Debug.traceShow (scale, bounds, scaledBounds) (
                               unscale scale . fst . L.maximumBy (comparing sort) $ counted
                             -- )
   where
     sort (c,n) = (n, Down (distance (0,0,0) c))
-    rs = let ((x,y,z),(x',y',z')) = scaledBounds
-          in product [abs (x' - x), abs (y' - y), abs (z' - z)]
+    rs = size scaledBounds
     f = 2 ^ scale -- choosing the scaling factor has a significant effect on results.
                     -- the exercise results are off by one when using 10, and correct when using 2
                     -- but the exampleHuge is only correct when using 2...
@@ -70,12 +77,118 @@ search scale bounds ns
 
     unscale 0 pos = pos
     unscale n (x,y,z) = -- Debug.traceShow ("FOUND", x,y,z) (
-                          search (scale - 1) ((pred x * f, pred y * f, pred z * f), (succ x * f, succ y * f, succ z * f)) ns
+                          searchScaling (scale - 1) ((pred x * f, pred y * f, pred z * f), (succ x * f, succ y * f, succ z * f)) ns
                         -- )
 
     counted = let ((x,y,z),(x',y',z')) = scaledBounds
                   cs = [(a,b,c) | a <- [x .. x'], b <- [y .. y'], c <- [z .. z']]
                in zip cs $ parMap rdeepseq nReachable cs
+
+searchDividing :: [Nanobot] -> Region -> Coord
+searchDividing ns = go . pure
+  where
+    go rs
+      | all (== 1) (size <$> rs) = L.minimumBy (comparing distanceHome) (fst <$> rs)
+      | otherwise = Debug.traceShow (length rs) $
+                     go (keepBest $ scored (rs >>= divide))
+
+    scored rs = zip rs (fmap (nReachable ns) rs)
+
+    keepBest [] = error "no best"
+    keepBest xs = let n = maximum (snd <$> xs)
+                   in fmap fst $ filter ((== n) . snd) xs
+
+    distanceHome = distance (0,0,0)
+
+nReachable ns r = length [ () | (Nanobot p s) <- ns
+                         , shortestPathTo p r <= s
+                         ]
+
+shortestPathTo :: Coord -> Region -> Distance
+shortestPathTo c@(x,y,z) r@((minx,miny,minz),(maxx,maxy,maxz))
+  | contains r c = 0
+  | above r c    = abs (y - maxy)
+  | below r c    = abs (miny - y)
+  | infront r c  = abs (minz - z)
+  | behind r c   = abs (z - maxz)
+  | leftOf r c   = abs (minx - x)
+  | rightOf r c  = abs (x - maxx)
+  | otherwise    = minimum $ fmap (distance c) (corners r)
+
+size :: Region -> Int
+size ((x,y,z),(x',y',z')) = product [abs (x' - x) + 1, abs (y' - y) + 1, abs (z' - z) + 1]
+
+divide :: Region -> [Region]
+divide r | size r <= 8 && size r > 0 = L.nub $ L.sort [(c,c) | c <- corners r]
+divide ((x,y,z),(x',y',z'))
+  = [((xa,ya,za), (xb,yb,zb)) | (xa,xb) <- [(x,xmid),(xmid,x')]
+                              , (ya,yb) <- [(y,ymid),(ymid,y')]
+                              , (za,zb) <- [(z,zmid),(zmid,z')]
+    ]
+  where
+    xmid = (x + x') `div` 2
+    ymid = (y + y') `div` 2
+    zmid = (z + z') `div` 2
+
+
+
+above :: Region -> Coord -> Bool
+above ((xmin,ymin,zmin),(xmax,ymax,zmax)) (x,y,z) = and [ xmin <= x
+                                                        , xmax >= x
+                                                        , zmin <= z
+                                                        , zmax >= z
+                                                        , ymax < y
+                                                        ]
+below :: Region -> Coord -> Bool
+below ((xmin,ymin,zmin),(xmax,ymax,zmax)) (x,y,z) = and [ xmin <= x
+                                                        , xmax >= x
+                                                        , zmin <= z
+                                                        , zmax >= z
+                                                        , ymin > y
+                                                        ]
+
+infront :: Region -> Coord -> Bool
+infront ((xmin,ymin,zmin),(xmax,ymax,zmax)) (x,y,z) = and [ xmin <= x
+                                                          , xmax >= x
+                                                          , ymin <= y
+                                                          , ymax >= y
+                                                          , zmin > z
+                                                          ]
+behind :: Region -> Coord -> Bool
+behind ((xmin,ymin,zmin),(xmax,ymax,zmax)) (x,y,z) = and [ xmin <= x
+                                                         , xmax >= x
+                                                         , ymin <= y
+                                                         , ymax >= y
+                                                         , zmax < z
+                                                         ]
+
+leftOf :: Region -> Coord -> Bool
+leftOf ((xmin,ymin,zmin),(xmax,ymax,zmax)) (x,y,z) = and [ xmin > x
+                                                         , ymin <= y
+                                                         , ymax >= y
+                                                         , zmin <= z
+                                                         , zmax >= z
+                                                         ]
+rightOf :: Region -> Coord -> Bool
+rightOf ((xmin,ymin,zmin),(xmax,ymax,zmax)) (x,y,z) = and [xmax < x
+                                                          ,ymin <= y
+                                                          ,ymax >= y
+                                                          ,zmin <= z
+                                                          ,zmax >= z
+                                                          ]
+
+corners :: Region -> [Coord]
+corners ((x,y,z),(x',y',z'))
+  = L.nub [(a,b,c) | a <- [x,x'], b <- [y,y'], c <- [z,z']]
+
+contains :: Region -> Coord -> Bool
+contains ((xmin,ymin,zmin),(xmax,ymax,zmax)) (x,y,z) = and [xmin <= x
+                                                          ,xmax >= x
+                                                          ,ymin <= y
+                                                          ,ymax >= y
+                                                          ,zmin <= z
+                                                          ,zmax >= z
+                                                          ]
 
 -- the coordinate with the best signal strength must lie within the bounding box of
 -- all the bots themselves. This function builds the bounds for that bounding box in
@@ -85,7 +198,7 @@ minmax (coord:coords) = L.foldl' (\(mins,maxes) c -> (all3 min c mins, all3 max 
 
 all3 f (x,y,z) (x',y',z') = (f x x', f y y', f z z')
 
-distance :: Coord -> Coord -> Int
+distance :: Coord -> Coord -> Distance
 distance (x,y,z) (x',y',z') = d x x' + d y y' + d z z'
   where d a b = abs (b - a)
 
