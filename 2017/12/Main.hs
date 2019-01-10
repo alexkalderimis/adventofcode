@@ -17,6 +17,8 @@ import           System.Exit
 import           Text.Parser.Char
 import           Text.Parser.Combinators (sepBy1)
 
+import Elves.Clique
+
 type Person = Int
 -- an infinite lazy graph from a person to all of their connections.
 -- This can be followed forever, so it must be guarded with a set
@@ -41,23 +43,10 @@ main = do
 cliqueSizeOf :: Person -> Village -> Maybe Int
 cliqueSizeOf p = fmap (S.size . clique) . listToMaybe . filter ((== p) . rootLabel)
 
-numberOfCliques :: Village -> Int
-numberOfCliques = snd . foldl' go (mempty, 0)
-  where
-    go (seen, n) node | S.member (rootLabel node) seen = (seen, n)
-    go (seen, n) node = (seen <> clique node, n + 1)
-
-clique :: Tree Person -> Set Person
-clique = go mempty
-  where
-    go seen (Node p _)  | S.member p seen = seen
-    go seen (Node p fs) = foldl' go (S.insert p seen) fs
-
 -- helpers for turning input into a search graph
 buildVillage :: Connections -> Village
-buildVillage conns = fmap node (M.keys conns)
-  where
-    node p = Node p (fmap node . S.toList . fromMaybe mempty $ M.lookup p conns)
+buildVillage conns = searchGraph (S.toList . fromMaybe mempty . flip M.lookup conns)
+                                 (M.keys conns)
 
 buildConnections :: [(Person, [Person])] -> Connections
 buildConnections = M.fromListWith (<>) . fmap (fmap S.fromList)
