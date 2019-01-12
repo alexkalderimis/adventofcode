@@ -34,9 +34,8 @@ data DanceMove
 type Dance = [DanceMove]
 
 main :: IO ()
-main = day 16 parser pt1 pt2 test
+main = day 16 inputP pt1 pt2 test
   where
-    parser = (danceMoveP `sepBy1` comma) <* optional newline
     init = A.listArray (0,15) ['a' .. 'p']
     pt1 moves = print . A.elems $ dance moves init
     pt2 moves = let target = 10 ^ 9
@@ -44,18 +43,20 @@ main = day 16 parser pt1 pt2 test
                       | n > target  = error "logic error - too many steps!"
                       | n == target = dancers
                       | otherwise   = let dancers' = dance moves dancers
+                                          completed = n + 1
                                        in case M.lookup dancers' seen of
-                                           Just n' -> let completed = n + 1
-                                                          step = completed - n'
+                                           Just n' -> let step = completed - n'
                                                           remaining = target - completed
-                                                       in go seen (completed + step * (remaining `quot` step)) dancers'
-                                           Nothing -> go (M.insert dancers' (n + 1) seen) (n + 1) dancers'
+                                                          ffwd = completed + step * (remaining `quot` step)
+                                                       in go seen ffwd dancers'
+                                           Nothing -> go (M.insert dancers' completed seen) completed dancers'
                 in print . A.elems $ go (M.singleton init 0) 0 init
 
-danceMoveP =  ("s" *> fmap Spin pos)
-          <|> ("x" *> (Exchange <$> pos <*> ("/" *> pos)))
-          <|> ("p" *> (Partner <$> dancer <*> ("/" *> dancer)))
+inputP = (danceMoveP `sepBy1` comma) <* optional newline
   where
+    danceMoveP =    ("s" *> (Spin     <$> pos))
+                <|> ("x" *> (Exchange <$> pos    <*> ("/" *> pos)))
+                <|> ("p" *> (Partner  <$> dancer <*> ("/" *> dancer)))
     pos = read <$> some digit
     dancer = letter
 
@@ -63,7 +64,7 @@ test = do
   let dancers = A.listArray (0,4)
   describe "parsing" $ do
     it "parses the example moves" $ do
-      parseOnly (danceMoveP `sepBy1` comma) "s1,x3/4,pe/b" `shouldBe` Right [Spin 1, Exchange 3 4, Partner 'e' 'b']
+      parseOnly inputP "s1,x3/4,pe/b" `shouldBe` Right [Spin 1, Exchange 3 4, Partner 'e' 'b']
   describe "Spin" $ do
     it "never produces indices out of range" $ property $ \(NonNegative n, NonNegative i) ->
       spin (0,15) n (i `mod` 16 :: Position) `elem` [0 .. 15]
