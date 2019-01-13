@@ -40,6 +40,24 @@ test = do
 
 nextVal = Z.focus . Z.right
 
+-- an interesting property holds: the next value right of 0 can be prediced from the sum
+-- of the previous value and the number of times that value was seen right of 0:
+--
+-- λ> analysePt2 359 500
+-- [(0,1),(1,1),(2,1),(3,1),(4,1),(5,1),(6,5),(11,1),(12,14),(26,142),(168,23),(191,70),(261,240*)]
+-- λ> analysePt2 359 2017
+-- [(0,1),(1,1),(2,1),(3,1),(4,1),(5,1),(6,5),(11,1),(12,14),(26,142),(168,23),(191,70),(261,270),(531,1487*)]
+--
+-- Here the last values are marked with * to indicate that they are not complete, so cannot
+-- be used to infer the next value.
+--
+-- If we can determine the sequence of lengths, then the full sequence can be predicted...
+analysePt2 :: Int -> Int -> [(Int, Int)]
+analysePt2 n j = fmap (head <#> length)
+               . L.group
+               . fmap (nextVal . Z.rewind)
+               $ L.scanl (flip (insert n)) (Z.singleton 0) [1 .. j]
+
 runSpinLock :: Int -> Int -> Buffer
 runSpinLock n j = L.foldl (flip (insert n)) (Z.singleton 0) [1 .. j]
 
