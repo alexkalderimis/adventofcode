@@ -3,7 +3,7 @@
 module Elves.CircularBuffer where
 
 import qualified Data.Foldable as Foldable (toList)
-import Data.Sequence (Seq)
+import Data.Sequence (Seq(..))
 import qualified Data.Sequence as Seq
 
 data Buffer a = Buffer { bufIdx :: !Int, getBuffer :: !(Seq a) }
@@ -43,3 +43,13 @@ insertL a (Buffer i b) = Buffer (succ i) (Seq.insertAt i a b)
 
 toList :: Buffer a -> [a]
 toList = Foldable.toList . getBuffer
+
+splitAt :: Int -> Buffer a -> (Buffer a,Buffer a)
+splitAt len (Buffer i b) = (Buffer 0 (as <> as'), Buffer 0 (bs <> bs'))
+  where
+    (lefts, rights) = Seq.splitAt i b
+    (as,bs) = Seq.splitAt len rights
+    holdovers = len - Seq.length as
+    (as',bs') = case holdovers of
+                  0 -> (Seq.empty, lefts)
+                  n -> Seq.splitAt n lefts

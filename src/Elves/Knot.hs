@@ -6,11 +6,12 @@ import           Data.Bits          (Bits, shiftR, xor)
 import qualified Data.ByteString    as B
 import           Data.Word
 
-import qualified Elves.Zipper as Z
-import           Elves.Zipper (Zipper)
+import qualified Elves.CircularBuffer as CB
+import           Elves.CircularBuffer (Buffer(..))
+import qualified Data.Sequence as Seq
 
-byteZipper :: Zipper Word8
-byteZipper = foldr Z.insertR (Z.singleton 0) [1 .. 255]
+byteZipper :: Buffer Word8
+byteZipper = CB.fromList [0 .. 255]
 
 hash :: B.ByteString -> B.ByteString
 hash = B.pack . hexadecimal . hashl
@@ -21,7 +22,7 @@ hashl input =
       bytes = B.unpack input ++ salt
       n     = B.length input + 5
       p z (skip, len) = pinch len skip z
-   in dense . Z.toList . Z.rewind
+   in dense . CB.toList
             . foldl' p byteZipper
             . zip [0 ..]
             . take (n * 64)
@@ -44,12 +45,10 @@ hexadecimal = (>>= byteToHex)
                        in [hexChars A.! h, hexChars A.! l]
 
 -- perform a round of the pinch hash.
--- This takes the length of the zipper to avoid having to recalculate it
--- each round.
-pinch :: Int -> Int -> Zipper a -> Zipper a
-pinch len skip z
-  = let (pinched, rst) = splitAt len (Z.toList z)
-        (x:xs)         = reverse pinched ++ rst
-        idx'           = (Z.idx z + len + skip) `mod` Z.zlen z
-    in Z.shiftTo idx' z { Z.lefts = [], Z.focus = x, Z.rights = xs }
+pinch :: Int -> Int -> Buffer a -> Buffer a
+pinch len skip b
+  = let (pinched, rst) = CB.splitAt len b
+        b'             = Seq.reverse (CB.getBuffer pinched) <> (CB.getBuffer rst)
+        (rs,ls)        = Seq.splitAt (Seq.length b' - CB.bufIdx b) b'
+     in CB.shift (len + skip) b { CB.getBuffer = ls <> rs }
 
