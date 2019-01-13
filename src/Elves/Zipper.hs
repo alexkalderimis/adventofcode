@@ -24,14 +24,22 @@ singleton :: a -> Zipper a
 singleton a = Zipper 0 1 [] a []
 
 left :: Zipper a -> Zipper a
-left (Zipper i n [] a [])         = Zipper i n [] a []
-left (Zipper i n [] a rs)         = left (Zipper i n (reverse rs) a [])
-left (Zipper i n (new:ls) old rs) = Zipper (pred i) n ls new (old:rs)
+left z = let (ls,a,rs) = go (lefts z) (focus z) (rights z)
+          in z { lefts = ls, rights = rs, focus = a, idx = idx' }
+  where 
+    idx' = if idx z == 0 then zlen z - 1 else pred (idx z)
+    go [] a []         = ([],a,[])
+    go [] a rs         = go (reverse rs) a []
+    go (new:ls) old rs = (ls,new,old:rs)
 
 right :: Zipper a -> Zipper a
-right (Zipper i _ [] a [])         = Zipper i 1 [] a []
-right (Zipper i n ls a [])         = right (Zipper i n [] a (reverse ls))
-right (Zipper i n ls old (new:rs)) = Zipper (succ i) n (old:ls) new rs
+right z = let (ls,a,rs) = go (lefts z) (focus z) (rights z)
+           in z { lefts = ls, rights = rs, focus = a, idx = idx' }
+  where 
+    idx' = (succ $ idx z) `mod` (zlen z)
+    go [] a []         = ([],a,[])
+    go ls a []         = go [] a (reverse ls)
+    go ls old (new:rs) = (old:ls,new,rs)
 
 -- insert one element to the right of the focus
 insertR :: a -> Zipper a -> Zipper a
@@ -48,14 +56,16 @@ rewind :: Zipper a -> Zipper a
 rewind = shiftTo 0
 
 shift :: Int -> Zipper a -> Zipper a
-shift 0 z = z
-shift n z
+shift n z 
+  | mod n (zlen z) == 0 = z
   | n < 0     = shift (succ n) (left z)
   | otherwise = shift (pred n) (right z)
 
 shiftTo :: Int -> Zipper a -> Zipper a
 shiftTo i z = shift (i - idx z) z
 
+-- generates a view from the focus forward.
+-- If you want the list to start from index 0, then please be kind, rewind!
 toList :: Zipper a -> [a]
 toList z = focus z : rights z ++ reverse (lefts z)
 
