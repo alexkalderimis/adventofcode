@@ -9,7 +9,7 @@ main :: IO ()
 main = staticDay 17 pt1 pt2 test
   where
     pt1 = print (nextVal $ runSpinLock 359 2017)
-    pt2 = print (nextVal $ B.rewind $ runSpinLock 359 100000) -- 50000000)
+    pt2 = print (nextVal $ B.rewind $ runSpinLock 359 50000000)
 
 test = do
   describe "example" $ do
@@ -36,6 +36,7 @@ test = do
     it "runs to the correct conclusion" $ do
       nextVal (runSpinLock n 2017) `shouldBe` 638
 
+-- get the value to the right of the current position
 nextVal = B.focus . B.right
 
 -- an interesting property holds: the next value right of 0 can be prediced from the sum
@@ -50,6 +51,8 @@ nextVal = B.focus . B.right
 -- be used to infer the next value.
 --
 -- If we can determine the sequence of lengths, then the full sequence can be predicted...
+-- update: turns out the best way forwards was just to use a better Buffer implementation,
+-- but perhaps there may have been an even cleverer trick.
 analysePt2 :: Int -> Int -> [(Int, Int)]
 analysePt2 n j = fmap (head <#> length)
                . L.group

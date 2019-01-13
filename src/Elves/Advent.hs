@@ -1,9 +1,11 @@
 module Elves.Advent where
 
+import qualified Data.Time.Clock as Clock
 import           Data.Attoparsec.Text    (Parser, parseOnly, endOfInput)
 import qualified Data.Text.IO            as Text
 import           System.Environment
 import           System.Exit
+import Control.Monad
 
 import           Test.Hspec
 
@@ -27,4 +29,14 @@ day n parser pt1 pt2 spec = do
     getInput = Text.getContents >>= either (die . ("Could not parse input! " ++)) pure
                                     . parseOnly (parser <* endOfInput)
 
+namedTime :: String -> IO () -> IO ()
+namedTime name act = do
+  when (not . null $ name) $ putStrLn name >> putStrLn (replicate (length name) '-')
+  start <- Clock.getCurrentTime
+  act
+  end <- Clock.getCurrentTime
+  print (Clock.diffUTCTime end start)
+  when (not . null $ name) $ putStrLn (replicate (length name) '-')
 
+time :: IO () -> IO ()
+time = namedTime ""
