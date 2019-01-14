@@ -1,12 +1,13 @@
 module Elves.RTreeSpec (spec) where
 
-import Control.Lens hiding (index)
-import qualified Data.Ix as Ix
-import Test.Hspec
-import Test.QuickCheck hiding (within)
+import           Control.Lens    hiding (index)
+import qualified Data.Ix         as Ix
+import           Test.Hspec
+import           Test.QuickCheck hiding (within)
 import qualified Test.QuickCheck as QC
 
-import Elves.RTree
+import           Elves.Coord
+import           Elves.RTree
 
 type Dim3 = (Int,Int,Int)
 type Dim3Set = RTree (Int,Int,Int) ()
@@ -50,7 +51,7 @@ query1 i t = take 1 $ query (i,i) t
 
 subregions :: RTree i a -> [RTree i a]
 subregions (Region _ ts) = ts
-subregions _ = []
+subregions _             = []
 
 maxRegionSize :: RTree i a -> Int
 maxRegionSize t = let rs = subregions t
@@ -75,14 +76,14 @@ spec = describe "Elves.RTree" $ do
        in query1 (fst e) t == [e]
     it "expanding a query never makes it less specific" $ property $ \(NonEmpty (e:elems)) ->
       let t = index (e : elems)
-       in (e :: (Dim3, ())) `elem` query (expandQuery 3 $ (fst e, fst e)) t 
+       in (e :: (Dim3, ())) `elem` query (expandQuery 3 $ (fst e, fst e)) t
     it "can find the midpoint in this line" $ do
       let t = Region ((0,-4,0,0),(0,4,0,0)) [Leaf (0,0,0,0) ()
                                             ,Leaf (0,4,0,0) ()
                                             ,Leaf (0,-4,0,0) ()
                                             ]
       query ((-3,-3,-3,-3),(3,3,3,3)) t `shouldSatisfy` elem ((0,0,0,0), ())
- 
+
   describe "overlaps" $ do
     it "knows that ranges that contain a common point overlap" $ property $ \(Cube a) (Cube b) ->
       overlaps a b == any (`within` b) [(p,p) | p <- Ix.range a ]
@@ -106,11 +107,11 @@ spec = describe "Elves.RTree" $ do
       ((-3,-3,-3),(3,3,3)) `shouldNotSatisfy` within ((0,-4,0),(0,4,0))
 
   describe "expandQuery" $ do
-    it "always includes the query" $ property $ \(NonNegative n) q -> 
+    it "always includes the query" $ property $ \(NonNegative n) q ->
       Ix.inRange (expandQuery n (q,q :: Dim3)) q
 
   describe "insert" $ do
-    it "increases size by one" $ property $ \t i -> 
+    it "increases size by one" $ property $ \t i ->
       size t + 1 == size (insert (i :: Dim3) () t)
     specify "insertion means queries are successful" $ property $ \t i ->
       query1 i (insert i () t) == [(i :: Dim3,())]

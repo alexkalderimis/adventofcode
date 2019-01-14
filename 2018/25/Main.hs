@@ -12,7 +12,8 @@ import           Text.Parser.Combinators (sepEndBy1)
 import           Elves
 import           Elves.Advent
 import           Elves.Clique
-import           Elves.RTree             (Coord, RTree)
+import           Elves.RTree             (RTree)
+import           Elves.Coord             (Coord, manhattan, dimensions)
 import qualified Elves.RTree             as RT
 
 import Test.QuickCheck
@@ -31,9 +32,6 @@ coordP = (,,,) <$> (int <* ",") <*> (int <* ",") <*> (int <* ",") <*> int
 
 inputP :: Parser [Point]
 inputP = coordP `sepEndBy1` newline
-
-manhattan :: Coord i => i -> i -> Int
-manhattan a b = sum [abs (view (runLens l) a - view (runLens l) b) | l <- RT.dimensions]
 
 pointsWithin :: (Ix i, Coord i) => Int -> RT.RTree i a -> i -> [i]
 pointsWithin n tree = \p -> filter ((<= n) . manhattan p)
@@ -88,7 +86,7 @@ test = do
 
 textify ps = Text.unlines (to_string <$> ps)
   where
-    to_string p = Text.intercalate "," (Text.pack . show . (p ^.) . runLens <$> RT.dimensions)
+    to_string p = Text.intercalate "," (Text.pack . show . (p ^.) . runLens <$> dimensions)
 
 example_1 :: [Point]
 example_1 =
