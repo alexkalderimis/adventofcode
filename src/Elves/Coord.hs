@@ -2,6 +2,7 @@
 
 module Elves.Coord where
 
+import qualified Data.List as L
 import           Control.Lens              hiding (contains, index)
 
 type Accessor a b = ReifiedLens a a b b
@@ -33,4 +34,13 @@ instance (Integral a, Integral b, Integral c, Integral d) => Coord (a,b,c,d) whe
 
 manhattan :: Coord i => i -> i -> Int
 manhattan a b = sum [abs (view (runLens l) a - view (runLens l) b) | l <- dimensions]
+
+translate :: Coord i => i -> i -> i
+translate delta pos = L.foldl' (\c d -> c & runLens d %~ (+ view (runLens d) delta)) pos dimensions
+
+invert :: Coord i => i -> i
+invert c = L.foldl' (\c d -> c & runLens d %~ negate) c dimensions
+
+scale :: Coord i => Int -> i -> i
+scale n c = L.foldl' (\p d -> p & runLens d %~ (* n)) c dimensions
 
