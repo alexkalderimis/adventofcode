@@ -253,6 +253,9 @@ instance (Real n) => CartesianCoordinate (n, n) n where
 
 instance (Real n) => CartesianCoordinate (n, n, n) n where
     points (x, y, z) = [x, y, z]
+
+instance (Real n) => CartesianCoordinate (n, n, n, n) n where
+    points (x, y, z, w) = [x, y, z, w]
     
 -- general purpose function for computing a straight-line distance
 -- between two points on a Cartesian plane of an arbitrary number of dimensions

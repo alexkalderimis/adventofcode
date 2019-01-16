@@ -12,6 +12,7 @@ import qualified Data.List                 as L
 import           Data.List.NonEmpty        (NonEmpty)
 import qualified Data.List.NonEmpty        as NE
 import           Data.Ord
+import           Data.Maybe
 import           Test.QuickCheck.Arbitrary (Arbitrary (arbitrary))
 
 import Elves.Coord
@@ -86,28 +87,28 @@ query q t
                                       Region _ ts -> ts >>= query q
   | otherwise             = []
 
+nearestNeighbour :: (Ix i, Coord i) => (i -> i -> Int) -> i -> RTree i a -> Maybe (i,a)
+nearestNeighbour _    _   Tip = Nothing
+nearestNeighbour dist pnt t = go init
+  where
+    q = (pnt,pnt)
+    search = (filter ((/= pnt) . fst) .) . query
+    init = if q `within` bounds t then 1
+                                  else L.minimum (dist pnt <$> corners (bounds t))
+    go n = let q' = expandQuery n q
+            in case search q' t of
+                 []      -> if bounds t `within` q'
+                               then Nothing -- the only this is the input
+                               else go (2 * n)
+                 matches -> let d = L.minimum $ fmap (dist pnt . fst) matches
+                             in listToMaybe . L.sortBy (comparing (dist pnt . fst))
+                                            $ search (expandQuery d q) t
+
 contains :: (Ix i, Coord i) => RTree i a -> RTree i a -> Bool
 contains _ Tip = True
 contains (Region bs _) (Leaf i _)     = Ix.inRange bs i
 contains (Region bs _) (Region bs' _) = bs' `within` bs
 contains _ _ = False
-
--- do a and b share any points?
-overlaps :: (Ix i, Coord i) => (i,i) -> (i,i) -> Bool
-overlaps (l0,h0) (l1,h1) = and $ do
-  Lens d <- dimensions
-  let a_before_b = (h0 ^. d) < (l1 ^. d)
-      b_before_a = (h1 ^. d) < (l0 ^. d)
-  return (not a_before_b && not b_before_a)
-
--- is a entirely within b?
-within :: (Ix i, Coord i) => (i,i) -> (i,i) -> Bool
-within a b = all (Ix.inRange b) (corners a)
-
-corners :: (Coord i) => (i,i) -> [i]
-corners (lb,ub) = L.foldl' f [lb] dimensions
-  where
-    f cs  l = cs >>= \c -> [c, set (runLens l) (view (runLens l) ub) c]
 
 expansion :: (Ix i, Coord i) => RTree i a -> RTree i a -> Int
 expansion t t' = sizeWith t t' - sizeWith Tip t'
@@ -129,3 +130,12 @@ expandB (i,j) = expand i . expand j
 expandQuery :: (Coord i) => Int -> (i,i) -> (i,i)
 expandQuery n q = L.foldl' go q dimensions
   where go (lb,ub) dim = (over (runLens dim) (subtract n) lb, over (runLens dim) (+ n) ub)
+
+scaleQuery :: (Coord i) => Int -> (i,i) -> (i,i)
+scaleQuery f q = L.foldl' go q dimensions
+  where go (lb,ub) dim = let mx = view (runLens dim) ub
+                             mn = view (runLens dim) lb
+                             size = 1 + mx - mn
+                             mid = (mn + mx) `div` 2
+                             diff = (size * f) `div` 2
+                          in (set (runLens dim) (mid - diff) lb, set (runLens dim) (mid + diff) ub)

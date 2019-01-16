@@ -2,6 +2,7 @@ module Elves.RTreeSpec (spec) where
 
 import           Control.Lens    hiding (index)
 import qualified Data.Ix         as Ix
+import qualified Data.List       as L
 import           Test.Hspec
 import           Test.QuickCheck hiding (within)
 import qualified Test.QuickCheck as QC
@@ -11,6 +12,11 @@ import           Elves.RTree
 
 type Dim3 = (Int,Int,Int)
 type Dim3Set = RTree (Int,Int,Int) ()
+
+newtype Unique a = Unique [a] deriving (Show)
+
+instance (Arbitrary a, Ord a) => Arbitrary (Unique a) where
+  arbitrary = Unique . L.nub . L.sort <$> arbitrary
 
 newtype Cube = Cube { getCube :: ((Int,Int,Int), (Int,Int,Int)) } deriving (Show, Eq)
 
@@ -56,6 +62,9 @@ subregions _             = []
 maxRegionSize :: RTree i a -> Int
 maxRegionSize t = let rs = subregions t
                    in maximum (length rs : fmap maxRegionSize rs)
+
+tree :: [Dim3] -> RTree Dim3 ()
+tree = foldr (\p -> insert p ()) Tip
 
 spec :: Spec
 spec = describe "Elves.RTree" $ do
@@ -109,6 +118,16 @@ spec = describe "Elves.RTree" $ do
   describe "expandQuery" $ do
     it "always includes the query" $ property $ \(NonNegative n) q ->
       Ix.inRange (expandQuery n (q,q :: Dim3)) q
+
+  describe "nearestNeighbour" $ do
+    specify "in a tree of size 2, one point is always the NN of the other"
+      $ property $ \a b ->
+        a == b || nearestNeighbour manhattan a (tree [a,b]) == Just (b,())
+    specify "in any tree, no point is closer than the NN"
+      $ property $ \(Unique points) -> case points of
+        (pnt:x:rst) -> let mnn = nearestNeighbour manhattan pnt (tree points)
+                        in maybe False ((manhattan pnt x >=) . manhattan pnt . fst) mnn
+        _ -> True
 
   describe "insert" $ do
     it "increases size by one" $ property $ \t i ->
