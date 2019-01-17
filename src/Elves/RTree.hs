@@ -120,20 +120,26 @@ nearestNeighbour dist pnt t   = go init
                       . L.sortBy (comparing (dist pnt . fst))
                       $ search (expandQuery d q) t
 
-nearestNeighbour2 :: forall i a b. (Coord i, Eq i, Real b)
-                  => (i -> i -> b) -> i -> RTree i a -> Maybe (i,a)
-nearestNeighbour2 dist pnt
-  = go . enqueue (Heap.empty :: Heap (Entry Double (RTree i a)))
+nearestNeighbour2 :: (Coord i, Eq i, Real b) => (i -> i -> b) -> i -> RTree i a -> Maybe (i,a)
+nearestNeighbour2 dist p = listToMaybe . nearestNeighbourK dist 1 p
+
+-- retrieve k nearest neighbours
+nearestNeighbourK :: forall i a b. (Coord i, Eq i, Real b)
+                  => (i -> i -> b) -> Int -> i -> RTree i a -> [(i,a)]
+nearestNeighbourK dist n pnt
+  = go (max 0 n) . enqueue (Heap.empty :: Heap (Entry Double (RTree i a)))
   where
     enqueue q t = case t of
       Tip        -> q
       Leaf i _   | pnt == i -> q
       Leaf i _   -> Heap.insert (Entry (realToFrac $ dist pnt i) t) q
       Region b _ -> Heap.insert (Entry (mindist pnt b) t) q
-    go q = Heap.uncons q >>= \(e,q') -> case Heap.payload e of
-            Tip         -> go q' -- impossible, but harmless
-            Leaf i a    -> Just (i,a)
-            Region _ ts -> go (L.foldl' enqueue q' ts)
+
+    go 0      _ = []
+    go needed q = maybeToList (Heap.uncons q) >>= \(e,q') -> case Heap.payload e of
+            Tip         -> go needed q' -- impossible, but harmless
+            Leaf i a    -> (i,a) : go (needed - 1) q'
+            Region _ ts -> go needed (L.foldl' enqueue q' ts)
 
 contains :: (Ix i, Coord i) => RTree i a -> RTree i a -> Bool
 contains _ Tip                        = True

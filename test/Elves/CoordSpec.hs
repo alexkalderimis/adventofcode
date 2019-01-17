@@ -126,6 +126,12 @@ spec = describe "Elves.Coord" $ do
       manhattan a (b :: Point) == sum (mindists (a,a) (b,b))
 
   describe "mindist" $ do
+    specify "mindist (0,0,7) ((-1,-4,-12),(-1,4,-12)) == 19.02.." $ do
+      let p = (0,0,7)
+          b = ((-1,-4,-12),(-1,4,-12))
+          x = (-1,0,-12)
+       in mindist p b `shouldBe` straightLine p x
+
     let box = ((3,4), (6,10))
     specify "the mindist is always >= 0" $ property $ \p (Cube b) ->
         mindist (p :: Point) b >= 0

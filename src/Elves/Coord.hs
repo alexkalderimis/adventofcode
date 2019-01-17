@@ -75,10 +75,17 @@ scale :: Coord i => Int -> i -> i
 scale n c = L.foldl' (\p d -> p & runLens d %~ (* n)) c dimensions
 
 mindist :: (Coord c, Ord b, Floating b) => c -> (c,c) -> b
-mindist p box = case filter (> 0) (mindists (p,p) box) of
-  []  -> 0
-  [x] -> realToFrac x
-  _   -> minimum (straightLine p <$> corners box)
+mindist p box = straightLine p (closestPoint p box)
+
+closestPoint :: (Coord c) => c -> (c,c) -> c
+closestPoint c (lb,ub) = L.foldl' go c dimensions
+  where go pnt dim = let x = view (runLens dim) pnt
+                         h = view (runLens dim) ub
+                         l = view (runLens dim) lb
+                         x' = if | x < l     -> l
+                                 | x > h     -> h
+                                 | otherwise -> x
+                      in set (runLens dim) x' pnt
 
 -- the distances from a to b, along each dimension
 mindists :: (Coord c) => (c,c) -> (c,c) -> [Int]

@@ -137,6 +137,13 @@ spec = describe "Elves.RTree" $ do
             b = nearestNeighbour straightLine pnt t
          in a == b
 
+  describe "nearestNeighbourK" $ do
+    specify "it returns values in ascending order" $ property $ \p points ->
+      let t = tree points
+          f = straightLine
+          matches = f p . fst <$> nearestNeighbourK f 5 p t
+       in and [ a <= b | (a,b) <- zip matches (tail matches) ]
+
   describe "insert" $ do
     it "increases size by one" $ property $ \t i ->
       size t + 1 == size (insert (i :: Dim3) () t)
