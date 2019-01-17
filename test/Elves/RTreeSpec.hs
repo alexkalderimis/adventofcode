@@ -1,11 +1,12 @@
 module Elves.RTreeSpec (spec) where
 
-import           Control.Lens    hiding (index)
-import qualified Data.Ix         as Ix
-import qualified Data.List       as L
+import           Control.Lens       hiding (index)
+import qualified Data.Ix            as Ix
+import qualified Data.List          as L
+import qualified Data.List.NonEmpty as NE
 import           Test.Hspec
-import           Test.QuickCheck hiding (within)
-import qualified Test.QuickCheck as QC
+import           Test.QuickCheck    hiding (within)
+import qualified Test.QuickCheck    as QC
 
 import           Elves.Coord
 import           Elves.RTree
@@ -56,7 +57,7 @@ query1 :: Dim3 -> Dim3Set -> [(Dim3,())]
 query1 i t = take 1 $ query (i,i) t
 
 subregions :: RTree i a -> [RTree i a]
-subregions (Region _ ts) = ts
+subregions (Region _ ts) = NE.toList ts
 subregions _             = []
 
 maxRegionSize :: RTree i a -> Int
@@ -87,22 +88,12 @@ spec = describe "Elves.RTree" $ do
       let t = index (e : elems)
        in (e :: (Dim3, ())) `elem` query (expandQuery 3 $ (fst e, fst e)) t
     it "can find the midpoint in this line" $ do
-      let t = Region ((0,-4,0,0),(0,4,0,0)) [Leaf (0,0,0,0) ()
-                                            ,Leaf (0,4,0,0) ()
-                                            ,Leaf (0,-4,0,0) ()
-                                            ]
+      let t = Region ((0,-4,0,0),(0,4,0,0)) (NE.fromList [Leaf (0,0,0,0) ()
+                                                         ,Leaf (0,4,0,0) ()
+                                                         ,Leaf (0,-4,0,0) ()
+                                                         ])
       query ((-3,-3,-3,-3),(3,3,3,3)) t `shouldSatisfy` elem ((0,0,0,0), ())
 
-  describe "overlaps" $ do
-    it "knows that ranges that contain a common point overlap" $ property $ \(Cube a) (Cube b) ->
-      overlaps a b == any (`within` b) [(p,p) | p <- Ix.range a ]
-    specify "is commutative" $ property $ \(Cube a) (Cube b) ->
-      overlaps a b == overlaps b a
-
-    it "knows that (-3,-3,-3,-3),(3,3,3,3) overlaps (0,-4,0,0),(0,4,0,0)" $ do
-      ((-3,-3,-3),(3,3,3)) `shouldSatisfy` overlaps ((0,-4,0),(0,4,0))
-    it "knows that (0,-4,0,0),(0,4,0,0) overlaps (-3,-3,-3,-3),(3,3,3,3)" $ do
-      ((0,-4,0),(0,4,0)) `shouldSatisfy` overlaps ((-3,-3,-3),(3,3,3))
 
   describe "within" $ do
     specify "all cubes that are within other cubes also overlap" $ property $ \(Cube a) (Cube b) ->
@@ -129,14 +120,32 @@ spec = describe "Elves.RTree" $ do
                         in maybe False ((manhattan pnt x >=) . manhattan pnt . fst) mnn
         _ -> True
 
+    -- manhattan-distance is very likely to lead to collisions, so
+    -- just verify the distance.
+    specify "nearestNeighbour and nearestNeighbour2 are equivalent, manhattan-wise"
+      $ property $ \pnt (Unique points) ->
+        let t = tree points
+            a = nearestNeighbour manhattan pnt t
+            b = nearestNeighbour manhattan pnt t
+            dist = manhattan pnt . fst
+         in fmap dist a == fmap dist b
+    -- straight-line distance is unlikely to have random collisions.
+    specify "nearestNeighbour and nearestNeighbour2 are equivalent, straight-line"
+      $ property $ \pnt (Unique points) ->
+        let t = tree points
+            a = nearestNeighbour straightLine pnt t
+            b = nearestNeighbour straightLine pnt t
+         in a == b
+
   describe "insert" $ do
     it "increases size by one" $ property $ \t i ->
       size t + 1 == size (insert (i :: Dim3) () t)
     specify "insertion means queries are successful" $ property $ \t i ->
       query1 i (insert i () t) == [(i :: Dim3,())]
     describe "A tree with sub regions" $ do
-      let t = Region (1,10) [ Region (1,3)  [Leaf 1 (), Leaf 3 ()]
-                            , Region (8,10) [Leaf 8 (), Leaf 10 ()]]
+      let t = Region (1,10) $ NE.fromList [ Region (1,3)  $ NE.fromList [Leaf 1 (), Leaf 3 ()]
+                                          , Region (8,10) $ NE.fromList [Leaf 8 (), Leaf 10 ()]
+                                          ]
       it "does not add a new direct child if it is contained by a sub-region" $ do
         let t' = insert (2 :: Int) () t
         length (subregions t') `shouldBe` 2
@@ -144,7 +153,7 @@ spec = describe "Elves.RTree" $ do
         let t' = insert (5 :: Int) () t
         length (subregions t') `shouldBe` 3
   describe "maxPageSize" $ do
-    let maxRegionSize t = case t of Region _ ts -> maximum (length ts : fmap maxRegionSize ts)
+    let maxRegionSize t = case t of Region _ ts -> maximum (NE.cons (length ts) (fmap maxRegionSize ts))
                                     _ -> 0
 
     specify "after indexing, no region is larger than the max-page-size" $ property $ \t ->

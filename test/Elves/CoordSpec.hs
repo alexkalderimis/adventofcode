@@ -12,6 +12,7 @@ import Elves.Coord
 type Point2 = (Int,Int)
 type Point  = (Int,Int,Int)
 type Point4 = (Int,Int,Int,Int)
+type B a = (a,a)
 
 newtype NonZero a = NonZero a deriving Show
 
@@ -77,10 +78,19 @@ spec = describe "Elves.Coord" $ do
     specify "((4,1),(8,10) does overlap ((5,3),(7,6))" $ do
       ((4,1),(8,10)) `shouldSatisfy` overlaps ((5,3),(7,6))
     it "is commutative" $ property $ \(Cube a) (Cube b) ->
-      overlaps a b == overlaps b (a :: (Point,Point))
+      overlaps a b == overlaps b (a :: B Point)
     it "means that at least one point in a is in b" $ property $ \(Cube a) (Cube b) ->
-      let implies = if overlaps a b then id else not
-       in implies $ any (Ix.inRange a) (Ix.range (b :: (Point,Point)))
+      overlaps a b == any (Ix.inRange a) (Ix.range (b :: B Point))
+
+    let lhs = ((0,-4,0),(0,4,0))
+        rhs = ((-3,-3,-3),(3,3,3))
+     in specify (show lhs ++ " overlaps " ++ show rhs) $ do
+         lhs `shouldSatisfy` overlaps rhs
+
+    let lhs = ((0,-4,0,0),(0,4,0,0))
+        rhs = ((-3,-3,-3,-3),(3,3,3,3))
+     in specify (show lhs ++ " overlaps " ++ show rhs) $ do
+         lhs `shouldSatisfy` overlaps rhs
 
   describe "straightLine" $ do
     let zero = 0 :: Double

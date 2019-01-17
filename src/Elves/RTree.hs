@@ -1,27 +1,38 @@
-{-# LANGUAGE DeriveFunctor     #-}
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE RankNTypes        #-}
+{-# LANGUAGE DeriveFunctor       #-}
+{-# LANGUAGE DeriveGeneric       #-}
+{-# LANGUAGE FlexibleInstances   #-}
+{-# LANGUAGE RankNTypes          #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module Elves.RTree where
 
+import           Control.DeepSeq           (NFData (..))
 import           Control.Lens              hiding (contains, index)
 import           Data.Foldable             (Foldable (foldMap))
+import           Data.Hashable             (Hashable)
+import           Data.Heap                 (Entry (..), Heap)
+import qualified Data.Heap                 as Heap
 import           Data.Ix                   (Ix)
 import qualified Data.Ix                   as Ix
 import qualified Data.List                 as L
-import           Data.List.NonEmpty        (NonEmpty)
+import           Data.List.NonEmpty        (NonEmpty(..))
 import qualified Data.List.NonEmpty        as NE
-import           Data.Ord
 import           Data.Maybe
+import           Data.Ord
+import           GHC.Generics              (Generic)
 import           Test.QuickCheck.Arbitrary (Arbitrary (arbitrary))
 
-import Elves.Coord
+import           Elves.Coord
 
-data RTree i a = Tip | Leaf i a | Region (i,i) [RTree i a]
-             deriving (Show, Eq, Functor)
+data RTree i a = Tip | Leaf i a | Region (i,i) (NonEmpty (RTree i a))
+             deriving (Show, Ord, Eq, Functor, Generic)
 
 instance (Arbitrary i, Arbitrary a, Ix i, Coord i) => Arbitrary (RTree i a) where
   arbitrary = fmap index arbitrary
+
+instance (Hashable i, Hashable a) => Hashable (RTree i a)
+
+instance (NFData i, NFData a) => NFData (RTree i a)
 
 instance Foldable (RTree a) where
   foldMap f t = case t of Tip         -> mempty
@@ -34,7 +45,7 @@ bounds (Region b _) = b
 bounds Tip          = error "no bounds of empty tree"
 
 maxPageSize :: Int
-maxPageSize = 10 -- tuneable page size
+maxPageSize = 4 -- tuneable page size
 
 size :: RTree i a -> Int
 size = sum . fmap (pure 1)
@@ -45,13 +56,13 @@ index = go 0
     boundify (i:is) = L.foldl' (\b i -> expand i b) (i,i) is
     go _ [] = Tip
     go dim xs
-      | n <= maxPageSize = Region (boundify (fst <$> xs)) (uncurry Leaf <$> xs)
+      | n <= maxPageSize = Region (boundify (fst <$> xs)) (uncurry Leaf <$> NE.fromList xs)
       | otherwise = let ds = dimensions
                         order = view $ runLens (ds !! (dim `mod` length ds))
                         chunk = n `div` (maxPageSize `div` 2)
                         ts = go (dim + 1) <$> chunksOf chunk (L.sortBy (comparing (order.fst)) xs)
                         bs = L.foldl1 expandB (bounds <$> ts)
-                     in Region bs ts
+                     in maybe Tip (Region bs) (NE.nonEmpty ts)
         where n = length xs
 
 chunksOf :: Int -> [a] -> [[a]]
@@ -66,49 +77,69 @@ insertT left Tip  = left
 insertT Tip right = right
 insertT left right | contains left right = insertT right left
 insertT left right = case right of
-  (Leaf i _)     -> Region (expand i $ bounds left) [left,right]
+  (Leaf i _)     -> Region (expand i $ bounds left) (left :| pure right)
   (Region bs ts) -> Region (let (i,j) = bounds left in expand i . expand j $ bounds right)
                            (insertChild left ts)
 
-insertChild :: (Ix i, Coord i) => RTree i a -> [RTree i a] -> [RTree i a]
+insertChild :: (Ix i, Coord i) => RTree i a -> NonEmpty (RTree i a) -> NonEmpty (RTree i a)
 insertChild t ts | length ts < maxPageSize =
-  case L.partition (`contains` t) ts of
-    ([],_)             -> t : ts
-    ((parent:ps), ts') -> insertT t parent : ps ++ ts'
-insertChild t ts = let (best:rest) = L.sortBy (comparing (expansion t)) ts
+  case NE.partition (`contains` t) ts of
+    ([],_)             -> NE.cons t ts
+    ((parent:ps), ts') -> insertT t parent :| ps ++ ts'
+insertChild t ts = let (best:rest) = L.sortBy (comparing (expansion t)) (NE.toList ts)
                        new = insertT t best
                        (inside,outside) = L.partition (overlaps (bounds new) . bounds) rest
-                    in (L.foldl' (\parent child -> insertT child parent) new inside : outside)
+                    in L.foldl' (\parent child -> insertT child parent) new inside :| outside
 
 query :: (Ix i, Coord i) => (i,i) -> RTree i a -> [(i,a)]
 query q Tip = []
 query q t
   | overlaps q (bounds t) = case t of Leaf i a    -> [(i,a)]
-                                      Region _ ts -> ts >>= query q
+                                      Region _ ts -> NE.toList ts >>= query q
   | otherwise             = []
 
-nearestNeighbour :: (Ix i, Coord i) => (i -> i -> Int) -> i -> RTree i a -> Maybe (i,a)
+nearestNeighbour :: (Real b, Ord b, Ix i, Coord i) => (i -> i -> b) -> i -> RTree i a -> Maybe (i,a)
 nearestNeighbour _    _   Tip = Nothing
-nearestNeighbour dist pnt t = go init
+nearestNeighbour dist pnt t   = go init
   where
     q = (pnt,pnt)
     search = (filter ((/= pnt) . fst) .) . query
-    init = if q `within` bounds t then 1
-                                  else L.minimum (dist pnt <$> corners (bounds t))
-    go n = let q' = expandQuery n q
-            in case search q' t of
-                 []      -> if bounds t `within` q'
-                               then Nothing -- the only this is the input
-                               else go (2 * n)
-                 matches -> let d = L.minimum $ fmap (dist pnt . fst) matches
-                             in listToMaybe . L.sortBy (comparing (dist pnt . fst))
-                                            $ search (expandQuery d q) t
+    dbl :: Double -> Double
+    dbl = id
+    init = if q `within` bounds t
+              then 1
+              else ceiling . dbl . realToFrac
+                   $ L.minimum (dist pnt <$> corners (bounds t))
+    go n = let q' = expandQuery n q in case search q' t of
+       []      -> if bounds t `within` q'
+                     then Nothing -- the only thing to find is the input
+                     else go (2 * n)
+       matches -> let d = ceiling . dbl . realToFrac . L.minimum
+                          $ fmap (dist pnt . fst) matches
+                   in listToMaybe
+                      . L.sortBy (comparing (dist pnt . fst))
+                      $ search (expandQuery d q) t
+
+nearestNeighbour2 :: forall i a b. (Coord i, Eq i, Real b)
+                  => (i -> i -> b) -> i -> RTree i a -> Maybe (i,a)
+nearestNeighbour2 dist pnt
+  = go . enqueue (Heap.empty :: Heap (Entry Double (RTree i a)))
+  where
+    enqueue q t = case t of
+      Tip        -> q
+      Leaf i _   | pnt == i -> q
+      Leaf i _   -> Heap.insert (Entry (realToFrac $ dist pnt i) t) q
+      Region b _ -> Heap.insert (Entry (mindist pnt b) t) q
+    go q = Heap.uncons q >>= \(e,q') -> case Heap.payload e of
+            Tip         -> go q' -- impossible, but harmless
+            Leaf i a    -> Just (i,a)
+            Region _ ts -> go (L.foldl' enqueue q' ts)
 
 contains :: (Ix i, Coord i) => RTree i a -> RTree i a -> Bool
-contains _ Tip = True
+contains _ Tip                        = True
 contains (Region bs _) (Leaf i _)     = Ix.inRange bs i
 contains (Region bs _) (Region bs' _) = bs' `within` bs
-contains _ _ = False
+contains _ _                          = False
 
 expansion :: (Ix i, Coord i) => RTree i a -> RTree i a -> Int
 expansion t t' = sizeWith t t' - sizeWith Tip t'

@@ -26,6 +26,8 @@ library:
   source-dirs: src
   dependencies:
     - psqueues
+    - heaps
+    - deepseq
     - array
     - containers
     - time
@@ -92,3 +94,16 @@ tests:
     - containers
     - lens
 
+benchmarks:
+  aoc-benchmarks:
+    dependencies:
+    - base >= 2 && < 6
+    - adventofcode
+    - criterion
+    - QuickCheck
+    ghc-options:
+    - -rtsopts
+    - -threaded
+    - -with-rtsopts=-N
+    main: Main.hs
+    source-dirs: benchmarks
