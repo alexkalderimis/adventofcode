@@ -126,7 +126,7 @@ spec = describe "Elves.RTree" $ do
       $ property $ \pnt (Unique points) ->
         let t = tree points
             a = nearestNeighbour manhattan pnt t
-            b = nearestNeighbour manhattan pnt t
+            b = nearestNeighbour2 manhattan pnt t
             dist = manhattan pnt . fst
          in fmap dist a == fmap dist b
     -- straight-line distance is unlikely to have random collisions.
@@ -134,7 +134,7 @@ spec = describe "Elves.RTree" $ do
       $ property $ \pnt (Unique points) ->
         let t = tree points
             a = nearestNeighbour straightLine pnt t
-            b = nearestNeighbour straightLine pnt t
+            b = nearestNeighbour2 straightLine pnt t
          in a == b
 
   describe "nearestNeighbourK" $ do
