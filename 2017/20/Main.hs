@@ -32,22 +32,25 @@ main = day 20 (zip [0..] <$> parser) pt1 pt2 test
 
 -- no more collisions are possible when no particles are going to invert
 -- and all particles are getting further away from each other
-pt2 sys = pt2A $ M.fromList [(pos pnt, (pid, pnt)) | (pid, pnt) <- sys]
+pt2 sys = runTilInversion $ M.fromList [(pos pnt, (pid, pnt)) | (pid, pnt) <- sys]
   where
-    pt2A sys =
+    runTilInversion sys = do
+      -- putStrLn $ "pt2-a: " ++ show ( M.size sys)
       let sys' = tickColliding sys
        in if any (willInvert . snd) sys'
-          then pt2A sys'
-          else pt2B sys' (M.fromList [(pid, []) | pid <- fst <$> M.elems sys'])
-    pt2B sys dists = do
-      let sys' = tickColliding sys
-          t = RT.index [(pos, ()) | pos <- M.keys sys']
-          d  pos = maybeToList . fmap (measure pos . fst) $ RT.nearestNeighbour measure pos t
+          then runTilInversion sys'
+          else runWhileApproaching sys' (M.fromList [(pid, []) | pid <- fst <$> M.elems sys'])
+    runWhileApproaching sys dists = do
+      -- putStrLn $ "pt2-b: " ++ show (M.size sys)
+      let sys'   = tickColliding sys
+          t      = RT.index [(pos, ()) | pos <- M.keys sys']
+          d  pos = maybeToList . fmap (measure pos . fst)
+                               $ RT.nearestNeighbour measure pos t
           ds pid = join . maybeToList $ M.lookup pid dists
           dists' = M.fromList [(pid, d (pos pnt) ++ ds pid) | (pid,pnt) <- M.elems sys']
       if M.size dists' < 2 || all receding dists'
          then print (M.size sys')
-         else pt2B sys' dists'
+         else runWhileApproaching sys' dists'
     receding (a:b:_) = a >= b
     receding _ = False
     measure :: Point -> Point -> Double
