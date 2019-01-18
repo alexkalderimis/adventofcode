@@ -1,25 +1,44 @@
 module Elves.RTreeSpec (spec) where
 
-import           Control.Lens       hiding (index)
-import qualified Data.Ix            as Ix
-import qualified Data.List          as L
-import qualified Data.List.NonEmpty as NE
+import           Control.Concurrent       (threadDelay)
+import qualified Control.Concurrent.Async as Async
+import           Control.Exception.Base   (Exception)
+import           Data.Functor.Compose
+import           Control.Lens             hiding (index)
+import qualified Data.Foldable            as F
+import qualified Data.Ix                  as Ix
+import qualified Data.List                as L
+import qualified Data.List.NonEmpty       as NE
 import           Test.Hspec
-import           Test.QuickCheck    hiding (within)
-import qualified Test.QuickCheck    as QC
+import           Test.QuickCheck          hiding (within)
+import qualified Test.QuickCheck          as QC
+import qualified Test.QuickCheck.Monadic  as QCM
 
 import           Elves.Coord
-import           Elves.RTree
+import           Elves.RTree              hiding (null)
+import qualified Elves.RTree              as RT
 
 type Dim3 = (Int,Int,Int)
 type Dim3Set = RTree (Int,Int,Int) ()
 
-newtype Unique a = Unique [a] deriving (Show)
+newtype Unique a = Unique { getUnique :: [a] } deriving (Show)
 
 instance (Arbitrary a, Ord a) => Arbitrary (Unique a) where
   arbitrary = Unique . L.nub . L.sort <$> arbitrary
 
 newtype Cube = Cube { getCube :: ((Int,Int,Int), (Int,Int,Int)) } deriving (Show, Eq)
+
+cubeSize :: Cube -> Int
+cubeSize (Cube bs) = Ix.rangeSize bs
+
+data Heuristic = Euclidean | Manhattan deriving (Show, Eq, Bounded, Enum)
+
+instance Arbitrary Heuristic where
+  arbitrary = arbitraryBoundedEnum
+
+getHeuristic :: Heuristic -> Dim3 -> Dim3 -> Double
+getHeuristic Euclidean = straightLine
+getHeuristic Manhattan = (realToFrac .) . manhattan
 
 instance Arbitrary Cube where
   arbitrary = do
@@ -46,6 +65,26 @@ instance Arbitrary CubeWithPoint where
   shrink (CubeWithPoint c p) = [CubeWithPoint shrunk p | shrunk <- shrink c
                                                        , Ix.inRange (getCube shrunk) p
                                ]
+
+data CubeWithCube = CubeWithCube Cube Cube deriving (Show)
+
+instance Arbitrary CubeWithCube where
+  arbitrary = do
+    a <- arbitrary
+    b <- arbitrary `suchThat` within a
+    return (CubeWithCube (Cube a) (Cube b))
+  shrink (CubeWithCube a b) = [CubeWithCube (Cube a') (Cube b') | (Cube a') <- shrink a
+                                                                , (Cube b') <- shrink b
+                                                                , a' `within` b'
+                              ]
+
+data NNInput a = NNInput a a [a] deriving Show
+
+instance (Arbitrary a, Ord a) => Arbitrary (NNInput a) where
+  arbitrary = do
+    (Unique (x:y:xs)) <- arbitrary `suchThat` ((>= 3) . length . getUnique)
+    return (NNInput x y xs)
+  shrink (NNInput a b cs) = NNInput a b <$> shrink cs
 
 makeCloser :: Int -> Int -> (Int,Int)
 makeCloser a b = case b - a of
@@ -83,7 +122,7 @@ spec = describe "Elves.RTree" $ do
        in query1 (fst e) (insert (fst e) (snd e) t) == [e]
     it "always finds what has been indexed" $ property $ \(NonEmpty (e:elems)) ->
       let t = index (e : elems)
-       in query1 (fst e) t == [e]
+       in query1 (fst e) t === [e]
     it "expanding a query never makes it less specific" $ property $ \(NonEmpty (e:elems)) ->
       let t = index (e : elems)
        in (e :: (Dim3, ())) `elem` query (expandQuery 3 $ (fst e, fst e)) t
@@ -96,8 +135,8 @@ spec = describe "Elves.RTree" $ do
 
 
   describe "within" $ do
-    specify "all cubes that are within other cubes also overlap" $ property $ \(Cube a) (Cube b) ->
-      if (a `within` b) then overlaps a b else True
+    specify "all cubes that are within other cubes also overlap" $ property $ \(CubeWithCube (Cube a) (Cube b)) ->
+      overlaps a b
     specify "all points in cube are entirely within it" $ property $ \(CubeWithPoint cube p) ->
       (p,p) `within` getCube cube
 
@@ -112,36 +151,20 @@ spec = describe "Elves.RTree" $ do
 
   describe "nearestNeighbour" $ do
     specify "in a tree of size 2, one point is always the NN of the other"
-      $ property $ \a b ->
-        a == b || nearestNeighbour manhattan a (tree [a,b]) == Just (b,())
-    specify "in any tree, no point is closer than the NN"
-      $ property $ \(Unique points) -> case points of
-        (pnt:x:rst) -> let mnn = nearestNeighbour manhattan pnt (tree points)
-                        in maybe False ((manhattan pnt x >=) . manhattan pnt . fst) mnn
-        _ -> True
-
-    -- manhattan-distance is very likely to lead to collisions, so
-    -- just verify the distance.
-    specify "nearestNeighbour and nearestNeighbour2 are equivalent, manhattan-wise"
-      $ property $ \pnt (Unique points) ->
-        let t = tree points
-            a = nearestNeighbour manhattan pnt t
-            b = nearestNeighbour2 manhattan pnt t
-            dist = manhattan pnt . fst
-         in fmap dist a == fmap dist b
-    -- straight-line distance is unlikely to have random collisions.
-    specify "nearestNeighbour and nearestNeighbour2 are equivalent, straight-line"
-      $ property $ \pnt (Unique points) ->
-        let t = tree points
-            a = nearestNeighbour straightLine pnt t
-            b = nearestNeighbour2 straightLine pnt t
-         in a == b
+      $ QC.within 1000 $ \h a b -> 
+        (a == b .||. nearestNeighbour (getHeuristic h) a (tree [a,b]) == Just (b,()))
+    specify "in any tree, for any heuristic no point is closer than the NN"
+      $ QC.within 20000 $ \h (NNInput x y others) ->
+        let f = getHeuristic h
+            points = x : y : others
+            t = tree points
+            mnn = nearestNeighbour f x t
+         in maybe False ((f x y >=) . f x . fst) mnn
 
   describe "nearestNeighbourK" $ do
-    specify "it returns values in ascending order" $ property $ \p points ->
-      let t = tree points
-          f = straightLine
-          matches = f p . fst <$> nearestNeighbourK f 5 p t
+    specify "it returns values in ascending order" $ QC.within 4000 $ \h (NonNegative k) p t ->
+      let f = getHeuristic h
+          matches = f p . fst <$> nearestNeighbourK f k p (t :: Dim3Set)
        in and [ a <= b | (a,b) <- zip matches (tail matches) ]
 
   describe "insert" $ do
@@ -159,13 +182,60 @@ spec = describe "Elves.RTree" $ do
       it "does add a new direct child if it is not contained by a sub-region" $ do
         let t' = insert (5 :: Int) () t
         length (subregions t') `shouldBe` 3
+
   describe "maxPageSize" $ do
     let maxRegionSize t = case t of Region _ ts -> maximum (NE.cons (length ts) (fmap maxRegionSize ts))
                                     _ -> 0
 
-    specify "after indexing, no region is larger than the max-page-size" $ property $ \t ->
+    specify "after indexing, no region is larger than the max-page-size" $ QC.within 5000 $ \t ->
       maxRegionSize (t :: Dim3Set) <= maxPageSize
-    specify "after inserting, no region is larger than the max-page-size" $ property $ \(NonEmpty elems) ->
+    specify "after inserting, no region is larger than the max-page-size" $ QC.within 10000 $ \(NonEmpty elems) ->
       let t = foldr (\i -> insert (i :: Dim3) ()) Tip elems
        in maxRegionSize t <= maxPageSize
+
+  describe "null" $ do
+    specify "null lists make null trees" $ property $ \ps ->
+      RT.null (tree ps) == null ps
+
+  describe "delete" $ do
+    it "reduces tree size" $ property $ \p ps ->
+      let t = tree (p:ps)
+       in size t > size (delete p t)
+    it "makes points impossible to find" $ property $ \p ps ->
+      null (query1 p . delete p $ tree (p:ps))
+
+  describe "sizeWith" $ do
+    specify "is always extent t when adding a Tip" $ property $ \t ->
+      sizeWith t RT.empty == extent (t :: Dim3Set)
+    specify "is always >= extent t when adding a tree" $ property $ \t0 t1 ->
+      sizeWith t0 t1 >= extent (t0 :: Dim3Set)
+    specify "can calculate the new size" $ do
+      sizeWith (Leaf (9,9,9) ()) (tree [(0,0,0),(3,1,5)]) `shouldBe` 1000
+
+  describe "insertWith" $ do
+    specify "it can operate as counting structure" $ do
+      let t = L.foldl' (\t p -> RT.insertWith (+) (p :: Dim3) (1 :: Int) t) RT.empty
+                   [(0,0,0),(0,0,1),(0,1,0),(1,2,1)
+                   ,(0,0,0),(0,0,1),(0,1,0)
+                           ,(0,0,1),(0,1,0)
+                           ,(0,0,1)
+                   ]
+      L.sort (assocs t) `shouldBe` L.sort [((0,0,0), 2)
+                                            ,((0,0,1), 4)
+                                            ,((0,1,0), 3)
+                                            ,((1,2,1), 1)
+                                            ]
+
+  describe "Traversable" $ do
+    let t = maybe (Left "urk") Right
+        f = Just 
+        g a = [a]
+    specify "naturality" $ property $ \rt ->
+      (t . traverse f $ rt) === (traverse (t . f) (rt :: Dim3Set))
+    specify "identity" $ property $ \rt ->
+      (traverse Identity $ rt) === (Identity (rt :: Dim3Set))
+    specify "composition" $ property $ \rt ->
+      let lhs = traverse (Compose . fmap g . f) rt
+          rhs = Compose . fmap (traverse g) . traverse f $ rt
+       in lhs === (rhs :: Compose Maybe [] (RTree Dim3 Char))
 

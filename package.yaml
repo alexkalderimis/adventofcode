@@ -93,6 +93,7 @@ tests:
     - QuickCheck
     - containers
     - lens
+    - async
 
 benchmarks:
   aoc-benchmarks:
