@@ -1,22 +1,22 @@
-{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE DeriveFunctor              #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE OverloadedStrings          #-}
 
-import           Data.Attoparsec.Text    (decimal, letter, signed)
-import           Data.Coerce             (coerce)
-import qualified Data.Foldable           as F
-import qualified Data.IntMap.Strict      as M
-import           Data.Monoid
-import           Data.Sequence           (Seq (..), (|>), (<|))
-import qualified Data.Sequence           as Seq
-import qualified Data.Text               as Text
-import           Data.Vector             (Vector)
-import qualified Data.Vector             as V
-import           Text.Parser.Char        (newline)
-import           Text.Parser.Combinators (choice, sepBy1)
-import           Control.Monad.Writer.Strict
 import           Control.Monad.State.Strict
-import Data.Functor.Identity
+import           Control.Monad.Writer.Strict
+import           Data.Attoparsec.Text        (decimal, letter, signed)
+import           Data.Coerce                 (coerce)
+import qualified Data.Foldable               as F
+import           Data.Functor.Identity
+import qualified Data.IntMap.Strict          as M
+import           Data.Monoid
+import           Data.Sequence               (Seq (..), (<|), (|>))
+import qualified Data.Sequence               as Seq
+import qualified Data.Text                   as Text
+import           Data.Vector                 (Vector)
+import qualified Data.Vector                 as V
+import           Text.Parser.Char            (newline)
+import           Text.Parser.Combinators     (choice, sepBy1)
 
 import           Elves
 import           Elves.Advent
@@ -27,8 +27,8 @@ type Memory = M.IntMap Int
 type Programme = Vector Instr
 
 data ProgrammeState = ProgrammeState
-  { instrPtr :: Int
-  , registers :: Memory
+  { instrPtr     :: Int
+  , registers    :: Memory
   , instructions :: Programme
   } deriving (Show)
 
@@ -54,7 +54,11 @@ main = day 18 (V.fromList <$> parser) pt1 pt2 test
   where
     parser = (instrP `sepBy1` newline)
     pt1 prg = let is = snd $ runUntilCompletion prg in print $ sum [1 | Mul{} <- is]
-    pt2 prg = error "you have to do this bit by hand, grasshopper!"
+    -- for the logic here, see input.disassembled
+    -- The programme we are given finds the number of non-primes
+    -- in this particular range.
+    pt2 _ = let xs = [106500, 106500 + 17 .. 123500]
+            in print . length $ filter (not . isPrime) xs
 
 runUntilCompletion :: Programme -> (Memory, [Instr])
 runUntilCompletion instrs =
@@ -63,6 +67,17 @@ runUntilCompletion instrs =
    in (mem, appEndo w [])
   where
     go = step >>= maybe go pure
+
+-- very very naive trial division search, but more
+-- than fast enough for our needs.
+isPrime :: Int -> Bool
+isPrime i = go 2 
+  where
+    lim = ceiling . sqrt $ realToFrac i
+    go fac | fac > lim = True
+    go fac = case i `mod` fac of
+               0 -> False
+               _ -> go (fac + 1)
 
 test = do
    let parse = parseOnly (instrP `sepBy1` newline)
@@ -113,7 +128,7 @@ step :: DebugM (Maybe Memory)
 step = do
   s <- get
   case instructions s V.!? instrPtr s of
-    Nothing -> Just <$> gets registers  
+    Nothing -> Just <$> gets registers
     Just i  -> tell (Endo (i:)) >> eval i >> pure Nothing
 
 eval :: Instr -> DebugM ()
