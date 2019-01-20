@@ -7,22 +7,13 @@ if (a == 0) {
 inc_h := false
 g := 2
 
-while (g != 0) {
-  d := 2
-  while (g != 0) {
-    e := 2
-    while (g != 0) {
-      g := (d * e) - b
-      if (g == 0) {
+for(;b < c;b += 17) {
+  for d <- [2 .. b] {
+    for e <- [2 .. b] {
+      if (d * e == b) {
         inc_h = true
       }
-      e++
-      g := (e - b)
     }
-    d++
-    g := (d - b)
   }
   h++ if inc_h
-  g := (b - c)
-  b += 17
 }
