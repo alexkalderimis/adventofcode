@@ -50,11 +50,11 @@ data Instr
  deriving (Show, Eq)
 
 main :: IO ()
-main = day 18 parser pt1 pt2 test
+main = day 18 (V.fromList <$> parser) pt1 pt2 test
   where
     parser = (instrP `sepBy1` newline)
-    pt1 prg = error "unimplemented"
-    pt2 prg = error "unimplemented"
+    pt1 prg = let is = snd $ runUntilCompletion prg in print $ sum [1 | Mul{} <- is]
+    pt2 prg = error "you have to do this bit by hand, grasshopper!"
 
 runUntilCompletion :: Programme -> (Memory, [Instr])
 runUntilCompletion instrs =
