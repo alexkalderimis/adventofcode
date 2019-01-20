@@ -4,28 +4,25 @@ if (a == 0) {
   b := 106500
   c := 123500
 }
-f := true
-while (f || g != 0) {
+inc_h := false
+g := 2
+
+while (g != 0) {
   d := 2
-  do {
+  while (g != 0) {
     e := 2
-    do {
-      g := d
-      mul g e
-      sub g b
+    while (g != 0) {
+      g := (d * e) - b
       if (g == 0) {
-        f := false
+        inc_h = true
       }
-      add e 1
-      g := e
-      sub g b
-    } while (g != 0)
-    add d 1
-    g := d
-    sub g b
-  } while (g != 0)
-  add h 1 unless f
-  g := b
-  sub g c
-  add b 17
+      e++
+      g := (e - b)
+    }
+    d++
+    g := (d - b)
+  }
+  h++ if inc_h
+  g := (b - c)
+  b += 17
 }
