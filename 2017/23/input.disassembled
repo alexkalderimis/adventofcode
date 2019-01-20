@@ -4,16 +4,15 @@ if (a == 0) {
   b := 106500
   c := 123500
 }
-inc_h := false
-g := 2
 
-for(;b < c;b += 17) {
-  for d <- [2 .. b] {
-    for e <- [2 .. b] {
-      if (d * e == b) {
-        inc_h = true
+for x <- [b, b + 17 .. c] {
+  is_prime := true
+  for d <- [2 .. x] {
+    for e <- [2 .. x] {
+      if (d * e == x) {
+        is_prime = false
       }
     }
   }
-  h++ if inc_h
+  h++ unless is_prime
 }
