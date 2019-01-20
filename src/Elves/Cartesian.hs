@@ -1,6 +1,7 @@
 module Elves.Cartesian where
 
 type Location = (Int, Int)
+data Direction = North | East | South | West deriving (Show, Eq, Bounded, Enum)
 
 translate :: Location -> Location -> Location
 translate (dy,dx) (y,x) = (y + dy, x + dx)
@@ -15,7 +16,13 @@ adjacent8 pos = fmap ($ pos) [up,down,left,right
                              ]
 
 up, down, left, right :: Location -> Location
-up    = translate (-1, 0)
-down  = translate ( 1, 0)
-left  = translate (0,  1)
-right = translate (0, -1)
+up    = move North 1
+down  = move South 1
+right = move East 1
+left  = move West 1
+
+move :: Direction -> Int -> Location -> Location
+move North n = translate (negate n, 0)
+move South n = translate (       n, 0)
+move West  n = translate (0, negate n)
+move East  n = translate (0,        n)

@@ -6,6 +6,10 @@ module Elves (
   minmax,
   locally,
   boundedSearch,
+  applyN,
+  applyNM,
+  cyclePred,
+  cycleSucc,
   (<#>),
   module X
   ) where
@@ -30,6 +34,21 @@ getMatrix = fmap (fmap read . words) . lines <$> getContents
 minmax :: Ord a => [a] -> Maybe (a,a)
 minmax = foldl' (\mp x -> fmap (cmp x) mp <|> Just (x,x)) Nothing
   where cmp x (a,b) = (min x a, max x b)
+
+-- call a function N times on a value
+applyN :: Int -> (a -> a) -> a -> a
+applyN n f = foldl' (.) id (replicate n f)
+
+applyNM :: Monad m => Int -> (a -> m a) -> a -> m a
+applyNM n act a = foldl' (>>=) (pure a) (replicate n act)
+
+cyclePred :: (Enum a, Eq a, Bounded a) => a -> a
+cyclePred x = if x == minBound then maxBound
+                               else pred x
+
+cycleSucc :: (Enum a, Eq a, Bounded a) => a -> a
+cycleSucc x = if x == maxBound then minBound
+                               else succ x
 
 -- like local in Reader - this allows a stateful
 -- action to run, and then have its modifications

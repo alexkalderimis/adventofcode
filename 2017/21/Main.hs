@@ -41,9 +41,7 @@ main = day 21 (ruleSet <$> parser) pt1 pt2 test
   where
     pt1 = run 5
     pt2 = run 18
-    run n rs = do pat0 <- init
-                  let pat5 = applyN n (tick rs) pat0
-                  print (pixelsOn pat5)
+    run n rs = init >>= print . pixelsOn . applyN n (tick rs)
     init = either die pure $ parseOnly (bitPattern 3) startPattern
 
 test = do
@@ -207,7 +205,7 @@ tick :: RuleSet -> BitPattern -> BitPattern
 tick rules (BitPattern a) = BitPattern $ A.listArray bs (bit <$> A.range bs)
   where
     chunks = getChunks rules divisor (BitPattern a)
-    bs = ((0,0), (newSize - 1, newSize - 1))
+    bs     = ((0,0), (newSize - 1, newSize - 1))
     bit ix = let groupIx = chunkIx newGrpSize ix
                  ix'     = offset newGrpSize ix
                  BitPattern chunk = fromMaybe (error $ "no chunk " ++ show groupIx
@@ -301,9 +299,6 @@ check = do
 
 pixelsOn :: BitPattern -> Int
 pixelsOn (BitPattern a) = length . filter id $ A.elems a
-
-applyN :: Int -> (a -> a)  -> a -> a
-applyN n f = L.foldl' (.) id (replicate n f)
 
 startPattern :: Text.Text
 startPattern = Text.intercalate "/"
