@@ -1,16 +1,20 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE OverloadedStrings          #-}
+{-# LANGUAGE RecordWildCards          #-}
 
 import           Control.Applicative
 import           Data.Hashable           (Hashable)
 import           Data.HashMap.Strict     (HashMap)
 import qualified Data.HashMap.Strict     as M
 import           Data.IntSet             (IntSet)
+import qualified Data.IntSet             as S
 import qualified Data.List               as L
 import           Data.Maybe
 import           Data.Monoid
 import           Data.Tree               (Forest, Tree (..))
 import           System.Exit
+import Control.Monad.State.Strict
+import Data.Functor.Identity
 
 import           Data.Attoparsec.Text    ((<?>), decimal, letter)
 import           Data.Text               (Text)
@@ -25,6 +29,15 @@ data Bit        = Zero   | One deriving (Show, Eq, Ord, Bounded, Enum)
 data Movement   = GoLeft | GoRight deriving (Show, Eq)
 type Tape       = IntSet
 newtype PhaseId = PhaseId Char deriving (Show, Eq, Hashable)
+
+newtype TuringM a = TuringM { runTuringM :: StateT TuringState Identity a }
+  deriving (Functor, Applicative, Monad, MonadState TuringState)
+
+data TuringState = TuringState
+  { tape :: Tape
+  , cursor :: Int
+  , turingMachine :: StateMachine
+  } deriving (Show, Eq)
 
 data StateMachine = StateMachine
   { machineHdr    :: Header
@@ -42,14 +55,79 @@ data Action = Action
   } deriving (Show, Eq)
 
 main :: IO ()
-main = day 24 parser pt1 pt2 test
+main = day 25 parser pt1 pt2 test
   where
-    pt1 = undefined
+    pt1 m = do
+      let s = newState m
+      print . checksum $ execState (runTuringM runUntilCheckSum) s
     pt2 = undefined
 
+newState :: StateMachine -> TuringState
+newState = TuringState mempty 0
+
+checksum :: TuringState -> Int
+checksum = S.size . tape
+
+runUntilCheckSum :: TuringM PhaseId
+runUntilCheckSum = do
+  hdr <- gets (machineHdr . turingMachine)
+  applyNM (fromIntegral $ checkSumAfter hdr) run (initPhase hdr)
+
+run :: PhaseId -> TuringM PhaseId
+run phaseId = do
+  phase <- getPhase phaseId
+  val <- readTape
+  case val of
+    Zero -> act (onZero phase)
+    One  -> act (onOne  phase)
+
+readTape :: TuringM Bit
+readTape = do
+  ix <- gets cursor
+  t  <- gets tape
+  return (if S.member ix t then One else Zero)
+
+getPhase :: PhaseId -> TuringM Phase
+getPhase pid = do
+  phases <- gets (machinePhases . turingMachine)
+  case M.lookup pid phases of
+    Nothing -> fail $ "machine error - cannot find phase: " ++ show pid
+    Just p -> pure p
+
+act :: Action -> TuringM PhaseId
+act Action{..} = do
+  writeTape actionWrite
+  move actionMove
+  pure actionCont
+
+move :: Movement -> TuringM ()
+move m = do
+  let f = case m of GoLeft -> pred
+                    GoRight -> succ
+  modify' $ \s -> s { cursor = f (cursor s) }
+
+writeTape :: Bit -> TuringM ()
+writeTape b = do
+  ix <- gets cursor
+  let f = case b of Zero -> S.delete ix
+                    One  -> S.insert ix 
+  modify' $ \s -> s { tape = f (tape s) }
+
 test = do
+  let em = parseOnly parser exampleMachine
+  let es = fmap newState em
+  describe "runUntilCheckSum" $ do
+    it "runs to the correct state" $ do
+      let (Right s) = es
+          (pid, s') = runState (runTuringM runUntilCheckSum) s
+      (pid, tape s') `shouldBe` (PhaseId 'A', S.fromList [-2,-1,1])
+  describe "pt1" $ do
+    it "produces the correct checksum" $ do
+      let (Right s) = es
+          cs = checksum $ execState (runTuringM runUntilCheckSum) s
+      cs `shouldBe` 3
+    
   describe "parser" $ do
-    let em = parseOnly parser exampleMachine
     it "parses the example correctly" $ do
       let expected = StateMachine (Header (PhaseId 'A') 6) 
                        $ M.fromList
