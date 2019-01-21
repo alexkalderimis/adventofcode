@@ -1,6 +1,7 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE OverloadedStrings          #-}
 {-# LANGUAGE RecordWildCards            #-}
+{-# LANGUAGE BangPatterns               #-}
 
 import           Control.Applicative
 import           Control.Monad.State.Strict
@@ -30,8 +31,8 @@ newtype TuringM a = TuringM { runTuringM :: StateT TuringState Identity a }
   deriving (Functor, Applicative, Monad, MonadState TuringState)
 
 data TuringState = TuringState
-  { tape          :: Tape
-  , cursor        :: Int
+  { tape          :: !Tape
+  , cursor        :: !Int
   , turingMachine :: StateMachine
   } deriving (Show, Eq)
 
