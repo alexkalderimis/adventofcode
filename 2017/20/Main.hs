@@ -1,23 +1,23 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-import           Data.Attoparsec.Text    (letter, signed, decimal)
+import           Control.Lens
+import           Control.Monad
+import           Data.Attoparsec.Text    (decimal, letter, signed)
 import qualified Data.List               as L
+import qualified Data.Map.Merge.Strict   as M
+import           Data.Map.Strict         (Map)
+import qualified Data.Map.Strict         as M
 import           Data.Maybe
+import           Data.Ord
 import qualified Data.Text               as Text
 import           Text.Parser.Char        (newline)
 import           Text.Parser.Combinators (sepBy1)
-import Control.Lens
-import Control.Monad
-import Data.Ord
-import qualified Data.Map.Strict as M
-import           Data.Map.Strict (Map)
-import qualified Data.Map.Merge.Strict as M
 
-import Elves
-import Elves.Advent
-import Elves.Coord
-import Elves.RTree (RTree)
-import qualified Elves.RTree as RT
+import           Elves
+import           Elves.Advent
+import           Elves.Coord
+import           Elves.RTree             (RTree)
+import qualified Elves.RTree             as RT
 
 type Point = (Int,Int,Int)
 
@@ -52,7 +52,7 @@ pt2 sys = runTilInversion $ M.fromList [(pos pnt, (pid, pnt)) | (pid, pnt) <- sy
          then print (M.size sys')
          else runWhileApproaching sys' dists'
     receding (a:b:_) = a >= b
-    receding _ = False
+    receding _       = False
     measure :: Point -> Point -> Double
     measure = straightLine
 

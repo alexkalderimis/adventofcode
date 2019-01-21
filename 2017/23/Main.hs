@@ -4,7 +4,6 @@
 
 import           Control.Monad.State.Strict
 import           Control.Monad.Writer.Strict
-import           Data.Attoparsec.Text        (decimal, letter, signed)
 import           Data.Coerce                 (coerce)
 import qualified Data.Foldable               as F
 import           Data.Functor.Identity
@@ -15,6 +14,8 @@ import qualified Data.Sequence               as Seq
 import qualified Data.Text                   as Text
 import           Data.Vector                 (Vector)
 import qualified Data.Vector                 as V
+
+import           Data.Attoparsec.Text        (decimal, letter, signed)
 import           Text.Parser.Char            (newline)
 import           Text.Parser.Combinators     (choice, sepBy1)
 
