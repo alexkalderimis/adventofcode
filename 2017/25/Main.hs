@@ -27,7 +27,7 @@ import           Elves.Advent
 
 data Bit        = Zero   | One deriving (Show, Eq, Ord, Bounded, Enum)
 data Movement   = GoLeft | GoRight deriving (Show, Eq)
-type Tape       = IntSet
+type Tape       = IntSet -- only represent 1's
 newtype PhaseId = PhaseId Char deriving (Show, Eq, Hashable)
 
 newtype TuringM a = TuringM { runTuringM :: StateT TuringState Identity a }
@@ -60,7 +60,7 @@ main = day 25 parser pt1 pt2 test
     pt1 m = do
       let s = newState m
       print . checksum $ execState (runTuringM runUntilCheckSum) s
-    pt2 = undefined
+    pt2 _ = print "woot!"
 
 newState :: StateMachine -> TuringState
 newState = TuringState mempty 0
