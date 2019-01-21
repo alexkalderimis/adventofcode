@@ -1,15 +1,11 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-import           Data.Heap               (Heap)
-import qualified Data.Heap               as Heap
 import qualified Data.List               as L
 import           Data.Maybe
-import           Data.Ord
 import qualified Data.Text               as Text
 import           System.Exit
 import           Data.Monoid
 import           Data.Tree (Forest, Tree(..))
-import qualified Data.Tree as Tree
 
 import           Data.Attoparsec.Text    (char, decimal)
 import           Text.Parser.Char        (newline)
