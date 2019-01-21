@@ -10,6 +10,8 @@ module Elves (
   applyNM,
   cyclePred,
   cycleSucc,
+  best,
+  bestTree,
   (<#>),
   module X
   ) where
@@ -18,6 +20,9 @@ import Control.Monad.State.Class
 import Control.Applicative as X
 import Data.List
 import Data.Maybe
+import Data.Monoid
+import Data.Ord
+import Data.Tree (Forest,Tree(..))
 import Data.Bool
 import Test.Hspec as X
 import Data.Attoparsec.Text as X (Parser, parseOnly)
@@ -49,6 +54,12 @@ cyclePred x = if x == minBound then maxBound
 cycleSucc :: (Enum a, Eq a, Bounded a) => a -> a
 cycleSucc x = if x == maxBound then minBound
                                else succ x
+
+best :: Ord b => (a -> b) -> [a] -> Maybe a
+best f = listToMaybe . sortBy (comparing (Down . f))
+
+bestTree :: (Monoid b, Ord b) => (a -> b) -> Forest a -> b
+bestTree f = maximum . (mempty :) . fmap ((<>) <$> f . rootLabel <*> bestTree f . subForest)
 
 -- like local in Reader - this allows a stateful
 -- action to run, and then have its modifications

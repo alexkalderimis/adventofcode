@@ -28,8 +28,8 @@ instance Ord Component where
 main :: IO ()
 main = day 24 parser pt1 pt2 test
   where
-    pt1 cs = print . highestStrength $ bridges 0 cs
-    pt2 cs = print . strongestLongest $ bridges 0 cs
+    pt1 = print . highestStrength  . bridges 0
+    pt2 = print . strongestLongest . bridges 0
 
 test = do
   let mcomps = parseOnly parser exampleComponents
@@ -72,17 +72,11 @@ test = do
                               ,Component 9 10
                               ]
 
-best :: Ord b => (a -> b) -> [a] -> Maybe a
-best f = listToMaybe . L.sortBy (comparing (Down . f))
-
-bestBridges :: (Monoid b, Ord b) => (Component -> b) -> Bridges -> b
-bestBridges f bs = maximum $ mempty : [f (rootLabel t) <> bestBridges f (subForest t) | t <- bs]
-
 highestStrength :: Bridges -> Word
-highestStrength = getSum . bestBridges (Sum . strength)
+highestStrength = getSum . bestTree (Sum . strength)
 
 strongestLongest :: Bridges -> Word
-strongestLongest = getSum . snd . bestBridges ((Sum . const 1) <#> (Sum . strength))
+strongestLongest = getSum . snd . bestTree ((Sum . const 1) <#> (Sum . strength))
 
 chainStrength :: [Component] -> Word
 chainStrength = sum . fmap strength
