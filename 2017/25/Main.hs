@@ -1,26 +1,22 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE OverloadedStrings          #-}
-{-# LANGUAGE RecordWildCards          #-}
+{-# LANGUAGE RecordWildCards            #-}
 
 import           Control.Applicative
-import           Data.Hashable           (Hashable)
-import           Data.HashMap.Strict     (HashMap)
-import qualified Data.HashMap.Strict     as M
-import           Data.IntSet             (IntSet)
-import qualified Data.IntSet             as S
-import qualified Data.List               as L
-import           Data.Maybe
+import           Control.Monad.State.Strict
+import           Data.Functor.Identity
+import           Data.Hashable              (Hashable)
+import           Data.HashMap.Strict        (HashMap)
+import qualified Data.HashMap.Strict        as M
+import           Data.IntSet                (IntSet)
+import qualified Data.IntSet                as S
 import           Data.Monoid
-import           Data.Tree               (Forest, Tree (..))
-import           System.Exit
-import Control.Monad.State.Strict
-import Data.Functor.Identity
 
-import           Data.Attoparsec.Text    ((<?>), decimal, letter)
-import           Data.Text               (Text)
-import qualified Data.Text               as Text
-import           Text.Parser.Char        (newline, space, text)
-import           Text.Parser.Combinators (choice, sepBy1)
+import           Data.Attoparsec.Text       (decimal, letter, (<?>))
+import           Data.Text                  (Text)
+import qualified Data.Text                  as Text
+import           Text.Parser.Char           (newline, space, text)
+import           Text.Parser.Combinators    (choice, sepBy1)
 
 import           Elves
 import           Elves.Advent
@@ -34,8 +30,8 @@ newtype TuringM a = TuringM { runTuringM :: StateT TuringState Identity a }
   deriving (Functor, Applicative, Monad, MonadState TuringState)
 
 data TuringState = TuringState
-  { tape :: Tape
-  , cursor :: Int
+  { tape          :: Tape
+  , cursor        :: Int
   , turingMachine :: StateMachine
   } deriving (Show, Eq)
 
@@ -46,8 +42,10 @@ data StateMachine = StateMachine
 
 data Header = Header { initPhase :: PhaseId, checkSumAfter :: Word }
   deriving (Show, Eq)
+
 data Phase = Phase { onZero :: Action, onOne :: Action }
   deriving (Show, Eq)
+
 data Action = Action
   { actionWrite :: Bit
   , actionMove  :: Movement
@@ -75,11 +73,11 @@ runUntilCheckSum = do
 
 run :: PhaseId -> TuringM PhaseId
 run phaseId = do
-  phase <- getPhase phaseId
-  val <- readTape
+  Phase{..} <- getPhase phaseId
+  val       <- readTape
   case val of
-    Zero -> act (onZero phase)
-    One  -> act (onOne  phase)
+    Zero -> act onZero
+    One  -> act onOne
 
 readTape :: TuringM Bit
 readTape = do
@@ -92,7 +90,7 @@ getPhase pid = do
   phases <- gets (machinePhases . turingMachine)
   case M.lookup pid phases of
     Nothing -> fail $ "machine error - cannot find phase: " ++ show pid
-    Just p -> pure p
+    Just p  -> pure p
 
 act :: Action -> TuringM PhaseId
 act Action{..} = do
@@ -101,17 +99,16 @@ act Action{..} = do
   pure actionCont
 
 move :: Movement -> TuringM ()
-move m = do
-  let f = case m of GoLeft -> pred
-                    GoRight -> succ
-  modify' $ \s -> s { cursor = f (cursor s) }
+move m = modify' $ \s -> s { cursor = f m (cursor s) }
+  where f GoLeft = pred
+        f GoRight = succ
 
 writeTape :: Bit -> TuringM ()
-writeTape b = do
-  ix <- gets cursor
-  let f = case b of Zero -> S.delete ix
-                    One  -> S.insert ix 
-  modify' $ \s -> s { tape = f (tape s) }
+writeTape b = modify' $ \s -> s { tape = setBit b (cursor s) (tape s) }
+
+setBit :: Bit -> Int -> Tape -> Tape
+setBit Zero = S.delete
+setBit One  = S.insert
 
 test = do
   let em = parseOnly parser exampleMachine
@@ -126,10 +123,10 @@ test = do
       let (Right s) = es
           cs = checksum $ execState (runTuringM runUntilCheckSum) s
       cs `shouldBe` 3
-    
+
   describe "parser" $ do
     it "parses the example correctly" $ do
-      let expected = StateMachine (Header (PhaseId 'A') 6) 
+      let expected = StateMachine (Header (PhaseId 'A') 6)
                        $ M.fromList
                          [(PhaseId 'A'
                           ,Phase (Action One GoRight (PhaseId 'B'))
