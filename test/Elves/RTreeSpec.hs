@@ -162,7 +162,7 @@ spec = describe "Elves.RTree" $ do
          in maybe False ((f x y >=) . f x . fst) mnn
 
   describe "nearestNeighbourK" $ do
-    specify "it returns values in ascending order" $ QC.within 4000 $ \h (NonNegative k) p t ->
+    specify "it returns values in ascending order" $ QC.within 5000 $ \h (NonNegative k) p t ->
       let f = getHeuristic h
           matches = f p . fst <$> nearestNeighbourK f k p (t :: Dim3Set)
        in and [ a <= b | (a,b) <- zip matches (tail matches) ]
@@ -189,7 +189,7 @@ spec = describe "Elves.RTree" $ do
 
     specify "after indexing, no region is larger than the max-page-size" $ QC.within 5000 $ \t ->
       maxRegionSize (t :: Dim3Set) <= maxPageSize
-    specify "after inserting, no region is larger than the max-page-size" $ QC.within 10000 $ \(NonEmpty elems) ->
+    specify "after inserting, no region is larger than the max-page-size" $ QC.within 20000 $ \(NonEmpty elems) ->
       let t = foldr (\i -> insert (i :: Dim3) ()) Tip elems
        in maxRegionSize t <= maxPageSize
 

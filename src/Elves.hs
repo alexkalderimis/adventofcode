@@ -14,6 +14,8 @@ module Elves (
   bestTree,
   namedExamples,
   testing,
+  interleave,
+  unterleave,
   (<#>),
   module X
   ) where
@@ -107,3 +109,15 @@ namedExamples = fmap $ \(inp, a) -> (Text.unpack inp, inp, a)
 
 testing :: (Show a, Eq a, Foldable t) => String -> Parser a -> t (String, Text, a) -> SpecWith ()
 testing pref p examples = forM_ examples $ \(name, inp, ret) -> it (unwords [pref, name]) (parseOnly p inp `shouldBe` Right ret)
+
+interleave :: [a] -> [a] -> [a]
+interleave [] ys = ys
+interleave xs [] = xs
+interleave (x:xs) (y:ys) = x : y : interleave xs ys
+
+-- instead of interleaving two lists, it un-interleaves it, so that "abcde" becomes: ("ace", "bd")
+unterleave :: [a] -> ([a], [a])
+unterleave = go ([],[])
+  where
+    go (xs,ys) (a:b:cs) = go (a:xs,b:ys) cs
+    go (xs,ys) cs       = (reverse xs ++ cs, reverse ys)

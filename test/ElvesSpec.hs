@@ -1,5 +1,6 @@
 module ElvesSpec (spec) where
 
+import qualified Data.HashSet as S
 import Test.Hspec
 import Test.QuickCheck
 
@@ -38,4 +39,25 @@ spec = do
     it "cannot find items excluded by the predicates" $ do
       property $ \(RangeWithInflection (IncreasingRange bs) pnt) ->
         Nothing == boundedSearch (< pnt) (> pnt) (== (pnt - 2)) bs
+  describe "interleave" $ do
+    it "can interleave two strings" $ do
+      interleave "abcde" "xyz" `shouldBe` "axbyczde"
+    specify "length A + length B == length (interleave A B)"
+      $ property $ \(ASCIIString xs) (ASCIIString ys) -> length xs + length ys === length (interleave xs ys)
+    specify "all As are in (interleave A B)"
+      $ property $ \(ASCIIString xs) (ASCIIString ys) ->
+        let s = S.fromList (interleave xs ys)
+         in all (flip S.member s) xs
+    specify "all Bs are in (interleave A B)"
+      $ property $ \(ASCIIString xs) (ASCIIString ys) ->
+        let s = S.fromList (interleave xs ys)
+         in all (flip S.member s) ys
+  describe "unterleave" $ do
+    it "can unterleave two strings" $ do
+      unterleave "axbyczde" `shouldBe` ("abcd", "xyze")
+    it "is the inverse of interleave" $ property $ \(ASCIIString xs) ->
+      let (as,bs) = unterleave xs
+       in interleave as bs == xs
+
+
 
