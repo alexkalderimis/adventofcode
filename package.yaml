@@ -55,6 +55,7 @@ executables:
     - -rtsopts
     - -with-rtsopts=-N
     dependencies:
+    - cryptonite
     - adventofcode
     - psqueues
     - array

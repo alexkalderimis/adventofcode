@@ -14,6 +14,7 @@ module Elves (
   bestTree,
   namedExamples,
   testing,
+  consider, which,
   interleave,
   unterleave,
   (<#>),
@@ -109,6 +110,12 @@ namedExamples = fmap $ \(inp, a) -> (Text.unpack inp, inp, a)
 
 testing :: (Show a, Eq a, Foldable t) => String -> Parser a -> t (String, Text, a) -> SpecWith ()
 testing pref p examples = forM_ examples $ \(name, inp, ret) -> it (unwords [pref, name]) (parseOnly p inp `shouldBe` Right ret)
+
+consider :: (Show a) => a -> (a -> SpecWith b) -> SpecWith b
+consider topic f = describe (show topic) (f topic)
+
+which :: (HasCallStack, Example a) => String -> a -> SpecWith (Arg a)
+which = it
 
 interleave :: [a] -> [a] -> [a]
 interleave [] ys = ys
