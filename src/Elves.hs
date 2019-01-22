@@ -12,18 +12,23 @@ module Elves (
   cycleSucc,
   best,
   bestTree,
+  namedExamples,
+  testing,
   (<#>),
   module X
   ) where
 
 import Control.Monad.State.Class
 import Control.Applicative as X
+import Control.Monad as X
 import Data.List
 import Data.Maybe
 import Data.Monoid
 import Data.Ord
 import Data.Tree (Forest,Tree(..))
 import Data.Bool
+import qualified Data.Text as Text
+import Data.Text (Text)
 import Test.Hspec as X
 import Data.Attoparsec.Text as X (Parser, parseOnly)
 
@@ -96,3 +101,9 @@ binarySearch rangeAdjust nextRange = go
            | otherwise       = let p = mid rng in go (nextRange p rng)
     rngSize (a,b) = (b - a) + 1
     mid rng = let n = rngSize rng in fst rng + (rangeAdjust n $ div n 2)
+
+namedExamples :: (Show a, Eq a, Functor f) => f (Text,a) -> f (String,Text,a)
+namedExamples = fmap $ \(inp, a) -> (Text.unpack inp, inp, a)
+
+testing :: (Show a, Eq a, Foldable t) => String -> Parser a -> t (String, Text, a) -> SpecWith ()
+testing pref p examples = forM_ examples $ \(name, inp, ret) -> it (unwords [pref, name]) (parseOnly p inp `shouldBe` Right ret)
