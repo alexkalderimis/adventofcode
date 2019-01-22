@@ -1,7 +1,6 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE OverloadedStrings          #-}
 {-# LANGUAGE RecordWildCards            #-}
-{-# LANGUAGE BangPatterns               #-}
 
 import           Control.Applicative
 import           Control.Monad.State.Strict
@@ -9,9 +8,9 @@ import           Data.Functor.Identity
 import           Data.Hashable              (Hashable)
 import           Data.HashMap.Strict        (HashMap)
 import qualified Data.HashMap.Strict        as M
+import qualified Data.HashSet               as HS
 import           Data.IntSet                (IntSet)
 import qualified Data.IntSet                as S
-import           Data.Monoid
 
 import           Data.Attoparsec.Text       (decimal, letter, (<?>))
 import           Data.Text                  (Text)
@@ -31,9 +30,8 @@ newtype TuringM a = TuringM { runTuringM :: StateT TuringState Identity a }
   deriving (Functor, Applicative, Monad, MonadState TuringState)
 
 data TuringState = TuringState
-  { tape          :: !Tape
-  , cursor        :: !Int
-  , turingMachine :: StateMachine
+  { tape   :: !Tape
+  , cursor :: !Int
   } deriving (Show, Eq)
 
 data StateMachine = StateMachine
@@ -54,58 +52,56 @@ data Action = Action
   } deriving (Show, Eq)
 
 main :: IO ()
-main = day 25 parser pt1 pt2 test
+main = day 25 (parser >>= validateMachine) pt1 pt2 test
   where
-    pt1 m = do
-      let s = newState m
-      print . checksum $ execState (runTuringM runUntilCheckSum) s
-    pt2 _ = print "woot!"
+    pt1   = print . checksum . snd . runUntilCheckSum
+    pt2 _ = putStrLn "woot!"
 
-newState :: StateMachine -> TuringState
+newState :: TuringState
 newState = TuringState mempty 0
 
 checksum :: TuringState -> Int
 checksum = S.size . tape
 
-runUntilCheckSum :: TuringM PhaseId
-runUntilCheckSum = do
-  hdr <- gets (machineHdr . turingMachine)
-  applyNM (fromIntegral $ checkSumAfter hdr) run (initPhase hdr)
+runUntilCheckSum :: StateMachine -> (PhaseId, TuringState)
+runUntilCheckSum m = runState (runTuringM go) newState
+  where go = applyNM (fromIntegral $ checkSumAfter $ machineHdr m)
+                     (run $ machinePhases m)
+                     (initPhase $ machineHdr m)
 
-run :: PhaseId -> TuringM PhaseId
-run phaseId = do
-  Phase{..} <- getPhase phaseId
-  val       <- readTape
+validateMachine :: (Monad m) => StateMachine -> m StateMachine
+validateMachine m@StateMachine{..}
+  | not (HS.null missingPhases) = fail $ "invalid machine, missing: " ++ show missingPhases
+  | otherwise = pure m
+  where
+    phases = initPhase machineHdr : fmap actionCont (M.elems machinePhases >>= actions)
+    actions p = [onZero p, onOne p]
+    missingPhases = HS.filter (not . flip M.member machinePhases) (HS.fromList phases)
+
+run :: HashMap PhaseId Phase -> PhaseId -> TuringM PhaseId
+run phases phaseId = do
+  let Phase{..} = phases M.! phaseId
+  val           <- gets readTape
   case val of
     Zero -> act onZero
     One  -> act onOne
 
-readTape :: TuringM Bit
-readTape = do
-  ix <- gets cursor
-  t  <- gets tape
-  return (if S.member ix t then One else Zero)
-
-getPhase :: PhaseId -> TuringM Phase
-getPhase pid = do
-  phases <- gets (machinePhases . turingMachine)
-  case M.lookup pid phases of
-    Nothing -> fail $ "machine error - cannot find phase: " ++ show pid
-    Just p  -> pure p
-
 act :: Action -> TuringM PhaseId
 act Action{..} = do
-  writeTape actionWrite
-  move actionMove
+  modify' (writeTape actionWrite)
+  modify' (move actionMove)
   pure actionCont
 
-move :: Movement -> TuringM ()
-move m = modify' $ \s -> s { cursor = f m (cursor s) }
-  where f GoLeft = pred
+move :: Movement -> TuringState -> TuringState
+move m s = s { cursor = f m (cursor s) }
+  where f GoLeft  = pred
         f GoRight = succ
 
-writeTape :: Bit -> TuringM ()
-writeTape b = modify' $ \s -> s { tape = setBit b (cursor s) (tape s) }
+readTape :: TuringState -> Bit
+readTape (TuringState t ix) = if S.member ix t then One else Zero
+
+writeTape :: Bit -> TuringState -> TuringState
+writeTape b s = s { tape = setBit b (cursor s) (tape s) }
 
 setBit :: Bit -> Int -> Tape -> Tape
 setBit Zero = S.delete
@@ -113,16 +109,25 @@ setBit One  = S.insert
 
 test = do
   let em = parseOnly parser exampleMachine
-  let es = fmap newState em
+  describe "validateMachine" $ do
+    specify "the example is valid" $ do
+      let (Right m) = em
+      m' <- validateMachine m
+      m `shouldBe` m'
+    specify "deleting a phase makes it invalid" $ do
+      let (Right m) = em
+          invalid = m { machinePhases = M.delete (PhaseId 'B') (machinePhases m) }
+      validateMachine invalid `shouldThrow` anyException
+
   describe "runUntilCheckSum" $ do
     it "runs to the correct state" $ do
-      let (Right s) = es
-          (pid, s') = runState (runTuringM runUntilCheckSum) s
-      (pid, tape s') `shouldBe` (PhaseId 'A', S.fromList [-2,-1,1])
+      let (Right m) = em
+          (pid, s) = runUntilCheckSum m
+      (pid, tape s) `shouldBe` (PhaseId 'A', S.fromList [-2,-1,1])
   describe "pt1" $ do
     it "produces the correct checksum" $ do
-      let (Right s) = es
-          cs = checksum $ execState (runTuringM runUntilCheckSum) s
+      let (Right m) = em
+          cs = checksum . snd $ runUntilCheckSum m
       cs `shouldBe` 3
 
   describe "parser" $ do
