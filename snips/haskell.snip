@@ -2,13 +2,13 @@ snippet advent
 options head
   import Elves
   import Elves.Advent
-
+  
   main :: IO ()
   main = day ${1:N} parser pt1 pt2 test
     where
       parser = pure ()
       pt1 () = error "unimplemented"
       pt2 () = error "unimplemented"
-
+  
   test = do
     pure ()

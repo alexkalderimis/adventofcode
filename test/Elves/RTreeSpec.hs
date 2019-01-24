@@ -1,5 +1,11 @@
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+
 module Elves.RTreeSpec (spec) where
 
+import Prelude hiding (lookup)
+
+import Control.Arrow (first)
+import Control.Category ((>>>))
 import           Control.Concurrent       (threadDelay)
 import qualified Control.Concurrent.Async as Async
 import           Control.Exception.Base   (Exception)
@@ -9,12 +15,15 @@ import qualified Data.Foldable            as F
 import qualified Data.Ix                  as Ix
 import qualified Data.List                as L
 import qualified Data.List.NonEmpty       as NE
+import           Data.List.NonEmpty       (NonEmpty(..))
 import           Test.Hspec
 import           Test.QuickCheck          hiding (within)
 import qualified Test.QuickCheck          as QC
 import qualified Test.QuickCheck.Monadic  as QCM
 
+import           Elves
 import           Elves.Coord
+import           Elves.LawsSpec 
 import           Elves.RTree              hiding (null)
 import qualified Elves.RTree              as RT
 
@@ -24,7 +33,7 @@ type Dim3Set = RTree (Int,Int,Int) ()
 newtype Unique a = Unique { getUnique :: [a] } deriving (Show)
 
 instance (Arbitrary a, Ord a) => Arbitrary (Unique a) where
-  arbitrary = Unique . L.nub . L.sort <$> arbitrary
+  arbitrary = Unique . L.nub . getSorted <$> arbitrary
 
 newtype Cube = Cube { getCube :: ((Int,Int,Int), (Int,Int,Int)) } deriving (Show, Eq)
 
@@ -36,9 +45,9 @@ data Heuristic = Euclidean | Manhattan deriving (Show, Eq, Bounded, Enum)
 instance Arbitrary Heuristic where
   arbitrary = arbitraryBoundedEnum
 
-getHeuristic :: Heuristic -> Dim3 -> Dim3 -> Double
-getHeuristic Euclidean = straightLine
-getHeuristic Manhattan = (realToFrac .) . manhattan
+measure :: Heuristic -> Dim3 -> Dim3 -> Double
+measure Euclidean = straightLine
+measure Manhattan = (realToFrac .) . manhattan
 
 instance Arbitrary Cube where
   arbitrary = do
@@ -82,7 +91,9 @@ data NNInput a = NNInput a a [a] deriving Show
 
 instance (Arbitrary a, Ord a) => Arbitrary (NNInput a) where
   arbitrary = do
-    (Unique (x:y:xs)) <- arbitrary `suchThat` ((>= 3) . length . getUnique)
+    Unique xs <- arbitrary
+    x <- arbitrary `suchThat` (not . (`elem` xs))
+    y <- arbitrary `suchThat` (not . (`elem` (x:xs)))
     return (NNInput x y xs)
   shrink (NNInput a b cs) = NNInput a b <$> shrink cs
 
@@ -93,7 +104,7 @@ makeCloser a b = case b - a of
   _ -> (a + 1, b - 1)
 
 query1 :: Dim3 -> Dim3Set -> [(Dim3,())]
-query1 i t = take 1 $ query (i,i) t
+query1 i t = fmap (first fst) . take 1 $ query Within (i,i) t
 
 subregions :: RTree i a -> [RTree i a]
 subregions (Region _ ts) = NE.toList ts
@@ -103,35 +114,89 @@ maxRegionSize :: RTree i a -> Int
 maxRegionSize t = let rs = subregions t
                    in maximum (length rs : fmap maxRegionSize rs)
 
-tree :: [Dim3] -> RTree Dim3 ()
-tree = foldr (\p -> insert p ()) Tip
+tree :: [Dim3] -> Dim3Set
+tree = index . flip zip (repeat ()) . fmap dbl
+
+depth :: RTree i a -> Int
+depth Tip = 0
+depth Leaf{} = 1
+depth (Region _ ts) = 1 + maximum (depth <$> ts)
+
+dbl :: a -> (a,a)
+dbl = (,) <$> id <*> id
 
 spec :: Spec
-spec = describe "Elves.RTree" $ do
+spec = describe "Elves.RTree" $ parallel $ do
+  let index' = index . fmap (first dbl)
   describe "size" $ do
-    it "always has the size of the elements you put in it" $ property $ \elems ->
-      let t = index elems
+    it "always has the size of the elements you put in it" $ property $ \(Unique elems) ->
+      let t = index' elems
        in size (t :: Dim3Set) == length elems
 
+  describe "expandB" $ do
+    it "is commutative" $ property $ \(Cube a) (Cube b) -> expandB a b === expandB b a
+
   describe "query" $ do
-    it "cannot find what has not been inserted" $ property $ \(NonEmpty (e:elems)) ->
-      let t = index (filter (/= e) elems)
-       in query1 (fst e) t == []
-    it "always finds what has been inserted" $ property $ \(NonEmpty (e:elems)) ->
-      let t = index (filter (/= e) elems)
-       in query1 (fst e) (insert (fst e) (snd e) t) == [e]
-    it "always finds what has been indexed" $ property $ \(NonEmpty (e:elems)) ->
-      let t = index (e : elems)
+    it "no-false-positives" $ property $ \e elems ->
+      let t = tree $ filter (/= e) elems
+       in query1 e t === []
+    it "no-false-negatives-insertPoint" $ property $ \e elems ->
+      let t = tree elems
+       in query1 e (insertPoint e () t) === [(e,())]
+    it "no-false-negatives" $ property $ \e elems ->
+      let t = index' (e : elems)
        in query1 (fst e) t === [e]
-    it "expanding a query never makes it less specific" $ property $ \(NonEmpty (e:elems)) ->
-      let t = index (e : elems)
-       in (e :: (Dim3, ())) `elem` query (expandQuery 3 $ (fst e, fst e)) t
+    describe "any strategy" $ do
+      it "no-false-negatives" $ property $ \strategy e elems ->
+        let t = index [(getCube x, ()) | x <- e : elems ]
+         in (getCube e, ()) `elem` query strategy (getCube e) t
+
+    describe "QueryStrategy" $ do
+      let a = Leaf (0, 10) 'A'
+          b = Leaf (5, 15) 'B'
+          c = Leaf (5, 10) 'C'
+          d = Leaf (20,30) 'D'
+          e = Leaf (-5,-1) 'E'
+          f = Leaf (23,27) 'F'
+          t = mconcat [a,b,c,d,e,f :: RTree Int Char]
+      let search i s = query s i t
+          shouldFind x = (`shouldContain` [x]) . fmap snd
+          shouldNotFind x = (`shouldNotContain` [x]) . fmap snd
+      consider Precisely $ do
+        forM_ [a,b,c,d,e,f] $ \(Leaf i a) -> do
+          which (show i <> " matches only itself") (search i >>> (`shouldBe` [(i,a)]))
+      consider Within $ do
+        forM_ [a,b,c,d,e,f] $ \(Leaf i a) -> do
+          which (show i <> " matches at least itself") (search i >>> shouldFind a)
+        which "finds f inside d"         (search (20,30) >>> shouldFind 'F')
+        which "does not find a inside d" (search (20,30) >>> shouldNotFind 'A')
+        which "finds c inside a"         (search ( 0,10) >>> shouldFind 'C')
+        which "does not find b inside a" (search ( 0,10) >>> shouldNotFind 'B')
+        which "does not find d inside a" (search ( 0,10) >>> shouldNotFind 'D')
+      consider Overlapping $ do
+        forM_ [a,b,c,d,e,f] $ \(Leaf i x) -> do
+          which (show i <> " matches at least itself") (search i >>> shouldFind x)
+        forM_ (pairs [a,b,c]) $ \(Leaf i x, Leaf _ y) -> do
+          which ("finds " <> [y] <> " overlapping " <> [x]) (search i >>> shouldFind y)
+        forM_ [a,b,c,d,f] $ \(Leaf i x) -> do
+          which ("does not find E overlapping " <> [x]) (search i >>> shouldNotFind 'E')
+
+    describe "lookup" $ do
+      specify "We can find anything present in the tree" $ QC.within 10000 $ \(Cube bs) x t ->
+        lookup bs (Leaf bs x <> t) === Just (x :: Word)
+      specify "We cannot find anything not present in the tree" $ QC.within 10000 $ \(Cube bs) xs ->
+        let t = index (filter ((/= bs) . fst) xs)
+         in lookup bs t === (Nothing :: Maybe Word)
+
+    it "expanding a query never makes it less specific" $ property $ \e elems ->
+      let t = index' (e : elems)
+       in (first dbl e) `elem` query Within (expandQuery 3 $ (fst e, fst e)) (t :: Dim3Set)
     it "can find the midpoint in this line" $ do
-      let t = Region ((0,-4,0,0),(0,4,0,0)) (NE.fromList [Leaf (0,0,0,0) ()
-                                                         ,Leaf (0,4,0,0) ()
-                                                         ,Leaf (0,-4,0,0) ()
+      let t = Region ((0,-4,0,0),(0,4,0,0)) (NE.fromList [Leaf (dbl (0,0,0,0)) ()
+                                                         ,Leaf (dbl (0,4,0,0)) ()
+                                                         ,Leaf (dbl (0,-4,0,0)) ()
                                                          ])
-      query ((-3,-3,-3,-3),(3,3,3,3)) t `shouldSatisfy` elem ((0,0,0,0), ())
+      query Within ((-3,-3,-3,-3),(3,3,3,3)) t `shouldSatisfy` elem (dbl (0,0,0,0), ())
 
 
   describe "within" $ do
@@ -151,36 +216,84 @@ spec = describe "Elves.RTree" $ do
 
   describe "nearestNeighbour" $ do
     specify "in a tree of size 2, one point is always the NN of the other"
-      $ QC.within 1000 $ \h a b -> 
-        (a == b .||. nearestNeighbour (getHeuristic h) a (tree [a,b]) == Just (b,()))
+      $ property $ \h a b -> 
+        (a == b .||. nearestNeighbour (measure h) a (tree [a,b]) == Just (dbl b,()))
     specify "in any tree, for any heuristic no point is closer than the NN"
-      $ QC.within 20000 $ \h (NNInput x y others) ->
-        let f = getHeuristic h
+      $ property $ \h (NNInput x y others) ->
+        let f = measure h
             points = x : y : others
             t = tree points
             mnn = nearestNeighbour f x t
-         in maybe False ((f x y >=) . f x . fst) mnn
+         in maybe False ((f x y >=) . f x . fst . fst) mnn
 
   describe "nearestNeighbourK" $ do
-    specify "it returns values in ascending order" $ QC.within 5000 $ \h (NonNegative k) p t ->
-      let f = getHeuristic h
-          matches = f p . fst <$> nearestNeighbourK f k p (t :: Dim3Set)
+    specify "it returns values in ascending order" $ property $ \h (NonNegative k) p t ->
+      let matches = mindist p . fst <$> nearestNeighbourK (measure h) k p (t :: Dim3Set)
        in and [ a <= b | (a,b) <- zip matches (tail matches) ]
 
   describe "insert" $ do
-    it "increases size by one" $ property $ \t i ->
-      size t + 1 == size (insert (i :: Dim3) () t)
-    specify "insertion means queries are successful" $ property $ \t i ->
-      query1 i (insert i () t) == [(i :: Dim3,())]
-    describe "A tree with sub regions" $ do
-      let t = Region (1,10) $ NE.fromList [ Region (1,3)  $ NE.fromList [Leaf 1 (), Leaf 3 ()]
-                                          , Region (8,10) $ NE.fromList [Leaf 8 (), Leaf 10 ()]
+
+    describe "a a duplicate entry" $ do
+      let a = Region ( 0,3) (Leaf (0,1) True :| [Leaf ( 2,3) False])
+          b = Region (-1,3) (Leaf (2,3) True :| [Leaf (-1,2) False])
+      it "does not exist" $ do
+        size (a <> b :: RTree Int Bool) `shouldBe` 3
+      it "has the value of the LHS when the LHS is a" $ do
+        lookup (2,3) (a <> b) `shouldBe` lookup (2,3) a
+      it "has the value of the LHS when the LHS is b" $ do
+        lookup (2,3) (b <> a) `shouldBe` lookup (2,3) b
+
+    specify "nested-objects" $ QC.within 1000 $ do
+      size (insertPoint (0,0,0) () $ insert ((-10,-10,-10),(10,10,10)) () RT.empty) `shouldBe` 2
+
+    -- 000000000011111111112
+    -- 012345678901234567890
+    -- +-------+ +---------+ 0
+    -- |A      | |B        | 1
+    -- |     +---------+   | 2
+    -- |  +-------------+  | 3
+    -- +--|F            |--+ 4
+    -- +--|             |--+ 5
+    -- |  +-------------+  | 6
+    -- |     |E        |   | 7
+    -- |C    +---------+  D| 8
+    -- +----------+ +------+ 9
+    describe "a severely overlapping case" $ do
+      let a = Leaf (( 0,  0), ( 4,  8)) 'A'
+          b = Leaf (( 0, 10), ( 4, 20)) 'B'
+          c = Leaf (( 5,  0), ( 9, 11)) 'C'
+          d = Leaf (( 5, 13), ( 9, 20)) 'D'
+          e = Leaf (( 2,  6), ( 8, 16)) 'E'
+          f = Leaf (( 3,  3), ( 6, 17)) 'F'
+      forM_ [a,b,c,d] $ flip consider $ do
+        which "overlaps e" (`shouldSatisfy` overlapping e)
+        which "overlaps f" (`shouldSatisfy` overlapping f)
+      consider f $ do
+        which "overlaps a" (`shouldSatisfy` overlapping a)
+        which "overlaps b" (`shouldSatisfy` overlapping b)
+        which "overlaps c" (`shouldSatisfy` overlapping c)
+        which "overlaps d" (`shouldSatisfy` overlapping d)
+        which "overlaps e" (`shouldSatisfy` overlapping e)
+      it "can combine these leaves" $ QC.within 500 $ do
+        mconcat [a,b,c,d,e,f] `shouldSatisfy` ((6 ==) . size)
+      it "can combine these leaves-depth" $ QC.within 500 $ do
+        mconcat [a,b,c,d] `shouldSatisfy` ((2 ==) . depth)
+      it "can combine these leaves-depth" $ QC.within 500 $ do
+        mconcat [a,b,c,d,e,f] `shouldSatisfy` ((3 ==) . depth)
+
+    it "increases-size" $ QC.within 10000 $ \t i -> do
+      size t + 1 `shouldBe` size (insertPoint (i :: Dim3) () t)
+    specify "makes-queries-work" $ QC.within 100000 $ \t i ->
+      query1 i (insertPoint i () t) == [(i :: Dim3,())]
+    describe "sub-regions" $ do
+      let t = Region (1,10) $ NE.fromList [ Region (1,3)  $ NE.fromList [Leaf (dbl 1) (), Leaf (dbl 3) ()]
+                                          , Region (8,10) $ NE.fromList [Leaf (dbl 8) (), Leaf (dbl 10) ()]
                                           ]
       it "does not add a new direct child if it is contained by a sub-region" $ do
-        let t' = insert (2 :: Int) () t
+        let t' = insertPoint (2 :: Int) () t
         length (subregions t') `shouldBe` 2
       it "does add a new direct child if it is not contained by a sub-region" $ do
-        let t' = insert (5 :: Int) () t
+        let t' = insertPoint (5 :: Int) () t
         length (subregions t') `shouldBe` 3
 
   describe "maxPageSize" $ do
@@ -190,7 +303,7 @@ spec = describe "Elves.RTree" $ do
     specify "after indexing, no region is larger than the max-page-size" $ QC.within 5000 $ \t ->
       maxRegionSize (t :: Dim3Set) <= maxPageSize
     specify "after inserting, no region is larger than the max-page-size" $ QC.within 20000 $ \(NonEmpty elems) ->
-      let t = foldr (\i -> insert (i :: Dim3) ()) Tip elems
+      let t = foldr (\i -> insertPoint (i :: Dim3) ()) Tip elems
        in maxRegionSize t <= maxPageSize
 
   describe "null" $ do
@@ -198,11 +311,11 @@ spec = describe "Elves.RTree" $ do
       RT.null (tree ps) == null ps
 
   describe "delete" $ do
-    it "reduces tree size" $ property $ \p ps ->
+    it "reduces tree size" $ QC.within 1000 $ \p ps ->
       let t = tree (p:ps)
-       in size t > size (delete p t)
-    it "makes points impossible to find" $ property $ \p ps ->
-      null (query1 p . delete p $ tree (p:ps))
+       in size t > size (delete (dbl p) t)
+    it "makes points impossible to find" $ QC.within 1000 $ \p ps ->
+      null (query1 p . delete (dbl p) $ tree (p:ps))
 
   describe "sizeWith" $ do
     specify "is always extent t when adding a Tip" $ property $ \t ->
@@ -210,32 +323,33 @@ spec = describe "Elves.RTree" $ do
     specify "is always >= extent t when adding a tree" $ property $ \t0 t1 ->
       sizeWith t0 t1 >= extent (t0 :: Dim3Set)
     specify "can calculate the new size" $ do
-      sizeWith (Leaf (9,9,9) ()) (tree [(0,0,0),(3,1,5)]) `shouldBe` 1000
+      sizeWith (Leaf (dbl (9,9,9)) ()) (tree [(0,0,0),(3,1,5)]) `shouldBe` 1000
 
   describe "insertWith" $ do
-    specify "it can operate as counting structure" $ do
-      let t = L.foldl' (\t p -> RT.insertWith (+) (p :: Dim3) (1 :: Int) t) RT.empty
+    specify "it can operate as counting structure" $ QC.within 1000 $ do
+      let t = L.foldl' (\t p -> RT.insertWith (+) (dbl (p :: Dim3)) (1 :: Int) t) RT.empty
                    [(0,0,0),(0,0,1),(0,1,0),(1,2,1)
                    ,(0,0,0),(0,0,1),(0,1,0)
                            ,(0,0,1),(0,1,0)
                            ,(0,0,1)
                    ]
-      L.sort (assocs t) `shouldBe` L.sort [((0,0,0), 2)
+      L.sort (fmap (first fst) $ assocs t) `shouldBe` L.sort [((0,0,0), 2)
                                             ,((0,0,1), 4)
                                             ,((0,1,0), 3)
                                             ,((1,2,1), 1)
                                             ]
 
-  describe "Traversable" $ do
-    let t = maybe (Left "urk") Right
-        f = Just 
-        g a = [a]
-    specify "naturality" $ property $ \rt ->
-      (t . traverse f $ rt) === (traverse (t . f) (rt :: Dim3Set))
-    specify "identity" $ property $ \rt ->
-      (traverse Identity $ rt) === (Identity (rt :: Dim3Set))
-    specify "composition" $ property $ \rt ->
-      let lhs = traverse (Compose . fmap g . f) rt
-          rhs = Compose . fmap (traverse g) . traverse f $ rt
-       in lhs === (rhs :: Compose Maybe [] (RTree Dim3 Char))
+  describe "Laws" $ do
+    describe "1D-Bool"  $ do
+      monoid (comparesEq :: Comparator (RTree Int Bool))
+      traversable (cast :: Cast (RTree Int Bool))
+    describe "Dim3Set"  $ do
+      monoid (comparesEq :: Comparator Dim3Set)
+      traversable (cast :: Cast Dim3Set)
+    describe "2D Chars" $ do
+      monoid (comparesEq :: Comparator (RTree (Int,Int) Char))
+      traversable (cast :: Cast (RTree (Int,Int) Char))
+    describe "4D Word"  $ do
+      monoid (comparesEq :: Comparator (RTree (Int,Int,Int,Int) Word))
+      traversable (cast :: Cast (RTree (Int,Int,Int,Int) Word))
 

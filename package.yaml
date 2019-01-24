@@ -34,6 +34,7 @@ library:
     - mtl
     - parsers
     - hspec
+    - hspec-core
     - vector
     - vector-instances
     - unordered-containers

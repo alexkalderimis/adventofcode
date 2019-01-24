@@ -24,6 +24,7 @@ module Elves (
 import Control.Monad.State.Class
 import Control.Applicative as X
 import Control.Monad as X
+import Control.Monad.Reader
 import Data.List
 import Data.Maybe
 import Data.Monoid
@@ -33,6 +34,7 @@ import Data.Bool
 import qualified Data.Text as Text
 import Data.Text (Text)
 import Test.Hspec as X
+import Test.Hspec.Core.Spec (SpecM)
 import Data.Attoparsec.Text as X (Parser, parseOnly)
 
 (<#>) :: Applicative f => f a -> f b -> f (a,b)
@@ -111,11 +113,14 @@ namedExamples = fmap $ \(inp, a) -> (Text.unpack inp, inp, a)
 testing :: (Show a, Eq a, Foldable t) => String -> Parser a -> t (String, Text, a) -> SpecWith ()
 testing pref p examples = forM_ examples $ \(name, inp, ret) -> it (unwords [pref, name]) (parseOnly p inp `shouldBe` Right ret)
 
-consider :: (Show a) => a -> (a -> SpecWith b) -> SpecWith b
-consider topic f = describe (show topic) (f topic)
+consider :: (Show a) => a -> ReaderT a (SpecM b) () -> SpecWith b
+consider topic m = describe (show topic) (runReaderT m topic)
 
-which :: (HasCallStack, Example a) => String -> a -> SpecWith (Arg a)
-which = it
+which :: (HasCallStack, Example a)
+      => String -> (topic -> a) -> ReaderT topic (SpecM (Arg a)) ()
+which msg test = do
+  a <- ask
+  lift (specify msg (test a))
 
 interleave :: [a] -> [a] -> [a]
 interleave [] ys = ys
