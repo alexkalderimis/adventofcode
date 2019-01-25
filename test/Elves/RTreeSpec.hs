@@ -182,9 +182,9 @@ spec = describe "Elves.RTree" $ parallel $ do
           which ("does not find E overlapping " <> [x]) (search i >>> shouldNotFind 'E')
 
     describe "lookup" $ do
-      specify "We can find anything present in the tree" $ QC.within 10000 $ \(Cube bs) x t ->
+      specify "We can find anything present in the tree" $ property $ \(Cube bs) x t ->
         lookup bs (Leaf bs x <> t) === Just (x :: Word)
-      specify "We cannot find anything not present in the tree" $ QC.within 10000 $ \(Cube bs) xs ->
+      specify "We cannot find anything not present in the tree" $ property $ \(Cube bs) xs ->
         let t = index (filter ((/= bs) . fst) xs)
          in lookup bs t === (Nothing :: Maybe Word)
 
@@ -233,15 +233,26 @@ spec = describe "Elves.RTree" $ parallel $ do
 
   describe "insert" $ do
 
-    describe "a a duplicate entry" $ do
-      let a = Region ( 0,3) (Leaf (0,1) True :| [Leaf ( 2,3) False])
-          b = Region (-1,3) (Leaf (2,3) True :| [Leaf (-1,2) False])
+    describe "duplicate entry" $ do
+      let a = Region ( 0,3) (Leaf ( 0,1) True  :| [Leaf (2,3) False])
+          b = Region (-1,3) (Leaf (-1,2) False :| [Leaf (2,3) True])
       it "does not exist" $ do
         size (a <> b :: RTree Int Bool) `shouldBe` 3
       it "has the value of the LHS when the LHS is a" $ do
         lookup (2,3) (a <> b) `shouldBe` lookup (2,3) a
       it "has the value of the LHS when the LHS is b" $ do
         lookup (2,3) (b <> a) `shouldBe` lookup (2,3) b
+
+    describe "counter-example-1" $ do
+      let a = Region (-2,3) (Leaf (-2,1) False :| [Leaf (3,3) True])
+          b = Region (0,4) (Leaf (0,3) True :| [Leaf (0,4) False])
+      specify "We can combine these regions" $ QC.within 100000 $ do
+        size (a <> b :: RTree Int Bool) === 4
+      describe "minimal-test-case" $ do
+        let mtc = compact $ Region (-2,4) $ sortKids $ insertChild pure (3,3) True
+                          $ (Leaf (-2,1) False :| [Leaf (0,3) True, Leaf (0,4) False])
+        it "completes successfully" $ QC.within 100000 $ do
+          size (mtc :: RTree Int Bool) === 4
 
     specify "nested-objects" $ QC.within 1000 $ do
       size (insertPoint (0,0,0) () $ insert ((-10,-10,-10),(10,10,10)) () RT.empty) `shouldBe` 2
@@ -274,17 +285,24 @@ spec = describe "Elves.RTree" $ parallel $ do
         which "overlaps c" (`shouldSatisfy` overlapping c)
         which "overlaps d" (`shouldSatisfy` overlapping d)
         which "overlaps e" (`shouldSatisfy` overlapping e)
-      it "can combine these leaves" $ QC.within 500 $ do
+      it "can combine these leaves" $ property $ do
         mconcat [a,b,c,d,e,f] `shouldSatisfy` ((6 ==) . size)
-      it "can combine these leaves-depth" $ QC.within 500 $ do
-        mconcat [a,b,c,d] `shouldSatisfy` ((2 ==) . depth)
-      it "can combine these leaves-depth" $ QC.within 500 $ do
+      it "can combine these leaves-depth" $ property $ do
         mconcat [a,b,c,d,e,f] `shouldSatisfy` ((3 ==) . depth)
 
-    it "increases-size" $ QC.within 10000 $ \t i -> do
-      size t + 1 `shouldBe` size (insertPoint (i :: Dim3) () t)
-    specify "makes-queries-work" $ QC.within 100000 $ \t i ->
+    it "increases-size" $ property $ \t i -> do
+      let delta = maybe 1 (pure 0) (lookup (i,i) t)
+          t' = insertPoint (i :: Dim3) () t
+      size t + delta `shouldBe` size t'
+    specify "makes-queries-work" $ property $ \t i ->
       query1 i (insertPoint i () t) == [(i :: Dim3,())]
+    describe "set-like behaviour" $ do
+      let d1_tree = index . flip zip (repeat ()) . fmap pair
+          t1 = d1_tree [(0,5),(4,7),( 9,18),(10,20),(15,16),(17,25)] 
+          t2 = d1_tree [(1,6),(5,8),(10,19),(11,21),(15,16),(18,26)] 
+      specify "<> acts like set-union" $ do
+        size (t1 <> t2) === (size t1) + (size t2) - 1
+                    
     describe "sub-regions" $ do
       let t = Region (1,10) $ NE.fromList [ Region (1,3)  $ NE.fromList [Leaf (dbl 1) (), Leaf (dbl 3) ()]
                                           , Region (8,10) $ NE.fromList [Leaf (dbl 8) (), Leaf (dbl 10) ()]
@@ -300,9 +318,9 @@ spec = describe "Elves.RTree" $ parallel $ do
     let maxRegionSize t = case t of Region _ ts -> maximum (NE.cons (length ts) (fmap maxRegionSize ts))
                                     _ -> 0
 
-    specify "after indexing, no region is larger than the max-page-size" $ QC.within 5000 $ \t ->
+    specify "after indexing, no region is larger than the max-page-size" $ property $ \t ->
       maxRegionSize (t :: Dim3Set) <= maxPageSize
-    specify "after inserting, no region is larger than the max-page-size" $ QC.within 20000 $ \(NonEmpty elems) ->
+    specify "after inserting, no region is larger than the max-page-size" $ property $ \(NonEmpty elems) ->
       let t = foldr (\i -> insertPoint (i :: Dim3) ()) Tip elems
        in maxRegionSize t <= maxPageSize
 
@@ -311,10 +329,10 @@ spec = describe "Elves.RTree" $ parallel $ do
       RT.null (tree ps) == null ps
 
   describe "delete" $ do
-    it "reduces tree size" $ QC.within 1000 $ \p ps ->
+    it "reduces tree size" $ property $ \p ps ->
       let t = tree (p:ps)
        in size t > size (delete (dbl p) t)
-    it "makes points impossible to find" $ QC.within 1000 $ \p ps ->
+    it "makes points impossible to find" $ property $ \p ps ->
       null (query1 p . delete (dbl p) $ tree (p:ps))
 
   describe "sizeWith" $ do
@@ -326,7 +344,7 @@ spec = describe "Elves.RTree" $ parallel $ do
       sizeWith (Leaf (dbl (9,9,9)) ()) (tree [(0,0,0),(3,1,5)]) `shouldBe` 1000
 
   describe "insertWith" $ do
-    specify "it can operate as counting structure" $ QC.within 1000 $ do
+    specify "it can operate as counting structure" $ property $ do
       let t = L.foldl' (\t p -> RT.insertWith (+) (dbl (p :: Dim3)) (1 :: Int) t) RT.empty
                    [(0,0,0),(0,0,1),(0,1,0),(1,2,1)
                    ,(0,0,0),(0,0,1),(0,1,0)
@@ -343,6 +361,15 @@ spec = describe "Elves.RTree" $ parallel $ do
     describe "1D-Bool"  $ do
       monoid (comparesEq :: Comparator (RTree Int Bool))
       traversable (cast :: Cast (RTree Int Bool))
+      describe "counter-example" $ do
+        let a = Leaf (1,4) False
+            b = Region (-5,6) (RT.sortKids (Leaf (3,6) False :| [Leaf (-5,3) True,Leaf (0,1) True]))
+            c = Region (3,10) (RT.sortKids (Leaf (4,7) False :| [Leaf (5,10) False,Leaf (3,6) True]))
+            eq = comparesEq :: Comparator (RTree Int Bool)
+            l_assoc = (a <> b) <> c
+            r_assoc = a <> (b <> c)
+        it "has same size" $ size l_assoc === size r_assoc
+        it "comparesEq" $ (l_assoc `eq` r_assoc)
     describe "Dim3Set"  $ do
       monoid (comparesEq :: Comparator Dim3Set)
       traversable (cast :: Cast Dim3Set)
@@ -353,3 +380,5 @@ spec = describe "Elves.RTree" $ parallel $ do
       monoid (comparesEq :: Comparator (RTree (Int,Int,Int,Int) Word))
       traversable (cast :: Cast (RTree (Int,Int,Int,Int) Word))
 
+pair :: (Int,Int) -> (Int,Int)
+pair = id

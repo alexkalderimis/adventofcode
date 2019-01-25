@@ -52,7 +52,7 @@ data RTree i a = Tip | Leaf (Bounds i) a | Region (Bounds i) (NonEmpty (RTree i 
 instance (Arbitrary i, Arbitrary a, Ix i, Coord i) => Arbitrary (RTree i a) where
   arbitrary = fmap (index . fmap (first getValidBounds)) arbitrary
   shrink (Region bs ts) = case ts of t :| [] -> [t]
-                                     t :| ts' -> fmap (\rst -> Region bs (t :| rst)) (tail $ L.tails ts')
+                                     t :| ts' -> fmap (\rst -> compact $ Region bs (t :| rst)) (tail $ L.tails ts')
   shrink _ = []
 
 instance (Hashable i, Hashable a) => Hashable (RTree i a)
@@ -124,16 +124,17 @@ index = go 0
     go dim xs
       | n <= maxPageSize = let bs = boundify (fst <$> xs)
                                ts = uncurry Leaf <$> xs
-                            in maybe Tip (Region bs) (NE.nonEmpty ts)
+                            in region bs ts
       | otherwise = let ds = dimensions
                         order = let f = view $ runLens (ds !! (dim `mod` length ds))
                                  in midPoint <$> (f . fst) <*> (f . snd)
                         chunk = n `div` (maxPageSize `div` 2)
                         ts = go (dim + 1) <$> chunksOf chunk (L.sortBy (comparing (order.fst)) xs)
                         bs = L.foldl1 expandB (catMaybes (bounds <$> ts))
-                     in maybe Tip (Region bs) (NE.nonEmpty ts)
+                     in region bs ts
         where n = length xs
               midPoint a b = (a + b) `div` 2
+              region bs ts = maybe Tip (compact . Region bs . sortKids) (NE.nonEmpty ts)
 
 chunksOf :: Int -> [a] -> [[a]]
 chunksOf _ [] = []
@@ -169,26 +170,49 @@ union :: (Ix i, Coord i) => RTree i a -> RTree i a -> RTree i a
 union = unionWith pure
 
 unionWith :: (Ix i, Coord i) => (a -> a -> a) -> RTree i a -> RTree i a -> RTree i a
-unionWith f (Leaf i a) (Leaf j b) | i == j = Leaf i (f a b)
-unionWith f l@(Leaf i a) r@(Leaf j b) = Region (expandB i j) (l :| pure r)
-unionWith f left right = case (bounds left, bounds right) of
-  (Nothing, _) -> right
-  (_, Nothing) -> left
-  (Just lb, Just rb) ->
-    let (l,r) = if left `contains` right then (right,left) else (left,right)
-        b = expandB lb rb
-     in case r of Leaf{}      -> Region b (insertChild f l (pure r))
-                  Region _ ts -> Region b (insertChild f l ts)
+unionWith f left Tip  = left
+unionWith f Tip right = right
+unionWith f l@(Leaf i a) r@(Leaf j b) | i == j    = Leaf i (f a b)
+unionWith f l r
+  | overlapping l r = compact $ case l of
+      Leaf i a -> let bs' = maybe i (expandB i) (bounds r)
+                      ts' = sortKids . insertChild f i a $ subtrees r
+                   in Region bs' ts'
+      Region _ ts -> F.foldl' (flip (unionWith f)) r ts
+  -- safe to use fromJust here, as we have guarded against Tips in the trivial
+  -- cases above.
+  | otherwise      = let bs' = fromJust (expandB <$> bounds l <*> bounds r)
+                         ts' = sortKids (l :| pure r)
+                      in Region bs' ts'
 
-insertChild :: (Ix i, Coord i) => (a -> a -> a) -> RTree i a -> NonEmpty (RTree i a) -> NonEmpty (RTree i a)
-insertChild f t ts | length ts < maxPageSize =
-  case NE.partition (`contains` t) ts of
-    ([],_)             -> NE.cons t ts
-    ((parent:ps), ts') -> unionWith f t parent :| ps ++ ts'
-insertChild f t ts = let (best:rest) = L.sortBy (comparing (expansion t)) (NE.toList ts)
-                         new = unionWith f t best
-                         (inside,outside) = L.partition (overlapping new) rest
-                      in L.foldl' (\parent child -> unionWith f child parent) new inside :| outside
+sortKids :: (Ord i) => NonEmpty (RTree i a) -> NonEmpty (RTree i a)
+sortKids = NE.sortBy (comparing bounds)
+
+-- remove useless intermediary nodes
+compact :: RTree i a -> RTree i a
+compact (Region _ (t :| [])) = t
+compact t                    = t
+
+subtrees :: RTree i a -> NonEmpty (RTree i a)
+subtrees (Region _ ts) = ts
+subtrees t = pure t
+
+insertChild :: (Ix i, Coord i) => (a -> a -> a) -> Bounds i -> a -> NonEmpty (RTree i a) -> NonEmpty (RTree i a)
+insertChild f bs a ts
+  | length ts < maxPageSize = if none isRegion ts
+                                 then case NE.partition (maybe False (== bs) . bounds) ts of
+                                        ([],        _) -> NE.cons (Leaf bs a) ts
+                                        (matches, ts') -> unionWith f (Leaf bs a) (mconcat matches) :| ts'
+                                 else case NE.partition (`contains` t) ts of
+                                        ([],        _) -> NE.cons t ts
+                                        (parents, ts') -> unionWith f t (mconcat parents) :| ts'
+  | otherwise               = let (best :| rest) = NE.sortBy (comparing (expansion t)) ts
+                               in unionWith f t best  :| rest
+    where t = Leaf bs a
+
+isRegion :: RTree i a -> Bool
+isRegion Region{} = True
+isRegion _ = False
 
 data QueryStrategy = Precisely | Within | Overlapping deriving (Show, Eq, Bounded, Enum)
 

@@ -7,6 +7,8 @@ import           Data.Functor.Compose
 import qualified Test.QuickCheck          as QC
 import qualified Test.QuickCheck.Property as QCP
 
+import qualified Debug.Trace as Debug
+
 type Comparator a = (a -> a -> Property)
 type Cast a = (a -> a)
 
@@ -22,13 +24,13 @@ cast = id
 
 monoid :: (Arbitrary a, Monoid a, Show a) => Comparator a -> SpecWith ()
 monoid eq = describe "Monoid" $ do
-  specify "mempty is right identity" $ QC.within 10000 $ \t ->
+  specify "mempty is right identity" $ property $ \t ->
     (t <> mempty) `eq` t
-  specify "mempty is left identity" $ QC.within 10000 $ \t ->
+  specify "mempty is left identity" $ property $ \t ->
     (mempty <> t) `eq` t
-  specify "semigroup law" $ QC.within 10000 $ \a b c ->
+  specify "semigroup law" $ property $ \a b c -> do
     (a <> (b <> c)) `eq` ((a <> b) <> c)
-  specify "mconcat is fold of <>" $ QC.within 10000 $ \ts ->
+  specify "mconcat is fold of <>" $ property $ \ts ->
     mconcat ts `eq` foldr (<>) mempty ts
 
 traversable :: (Traversable t, Arbitrary (t a), Show (t a), Eq (t a)) => Cast (t a) -> SpecWith ()

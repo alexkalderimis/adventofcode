@@ -10,7 +10,7 @@ import           Control.Lens              hiding (contains, index)
 
 type Accessor a b = ReifiedLens a a b b
 
-class Coord a where
+class Ord a => Coord a where
   dimensions :: [Accessor a Int]
   origin :: a
 
