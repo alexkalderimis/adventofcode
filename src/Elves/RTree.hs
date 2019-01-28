@@ -28,6 +28,7 @@ import           Data.Monoid hiding (First(..), (<>))
 import           Data.Semigroup
 import           Data.Ord
 import           GHC.Generics              (Generic)
+import qualified Data.Tree as Tree
 
 import           Test.QuickCheck.Arbitrary (Arbitrary (arbitrary, shrink), arbitraryBoundedEnum)
 import           Test.QuickCheck.Gen (suchThat)
@@ -46,8 +47,11 @@ instance (Arbitrary i, Coord i) => Arbitrary (ValidBounds i) where
    where
      allDimensionsAbove lb ub = all (\(Lens d) -> lb^.d <= ub^.d) dimensions
 
-data RTree i a = Tip | Leaf (Bounds i) a | Region (Bounds i) (NonEmpty (RTree i a))
-             deriving (Show, Functor, Generic)
+data RTree i a
+  = Tip
+  | Leaf (Bounds i) a
+  | Region (Bounds i) (NonEmpty (RTree i a))
+  deriving (Show, Functor, Generic)
 
 instance (Arbitrary i, Arbitrary a, Ix i, Coord i) => Arbitrary (RTree i a) where
   arbitrary = fmap (index . fmap (first getValidBounds)) arbitrary
@@ -172,15 +176,17 @@ union = unionWith pure
 unionWith :: (Ix i, Coord i) => (a -> a -> a) -> RTree i a -> RTree i a -> RTree i a
 unionWith f left Tip  = left
 unionWith f Tip right = right
-unionWith f l@(Leaf i a) r@(Leaf j b) | i == j    = Leaf i (f a b)
+unionWith f l@(Leaf i a) r@(Leaf j b)
+  | i == j    = Leaf i (f a b)
+  | otherwise = Region (expandB i j) (sortKids (l :| pure r))
 unionWith f l r
   | overlapping l r = compact $ case l of
       Leaf i a -> let bs' = maybe i (expandB i) (bounds r)
                       ts' = sortKids . insertChild f i a $ subtrees r
                    in Region bs' ts'
-      Region _ ts -> F.foldl' (flip (unionWith f)) r ts
-  -- safe to use fromJust here, as we have guarded against Tips in the trivial
-  -- cases above.
+      Region{} -> F.foldl' (flip (unionWith f)) r (leaves l)
+  -- safe to use fromJust here, as we have guarded against Tips
+  -- in the trivial cases above.
   | otherwise      = let bs' = fromJust (expandB <$> bounds l <*> bounds r)
                          ts' = sortKids (l :| pure r)
                       in Region bs' ts'
@@ -197,18 +203,28 @@ subtrees :: RTree i a -> NonEmpty (RTree i a)
 subtrees (Region _ ts) = ts
 subtrees t = pure t
 
-insertChild :: (Ix i, Coord i) => (a -> a -> a) -> Bounds i -> a -> NonEmpty (RTree i a) -> NonEmpty (RTree i a)
-insertChild f bs a ts
-  | length ts < maxPageSize = if none isRegion ts
-                                 then case NE.partition (maybe False (== bs) . bounds) ts of
-                                        ([],        _) -> NE.cons (Leaf bs a) ts
-                                        (matches, ts') -> unionWith f (Leaf bs a) (mconcat matches) :| ts'
-                                 else case NE.partition (`contains` t) ts of
-                                        ([],        _) -> NE.cons t ts
-                                        (parents, ts') -> unionWith f t (mconcat parents) :| ts'
-  | otherwise               = let (best :| rest) = NE.sortBy (comparing (expansion t)) ts
-                               in unionWith f t best  :| rest
-    where t = Leaf bs a
+leaves :: RTree i a -> [RTree i a]
+leaves t = case t of
+  Region _ ts -> NE.toList ts >>= leaves
+  _           -> pure t
+
+insertChild :: (Ix i, Coord i)
+            => (a -> a -> a) -> Bounds i -> a -> NonEmpty (RTree i a) -> NonEmpty (RTree i a)
+insertChild f bs a ts = case (length ts < maxPageSize, none isRegion ts) of
+  (True, True) -> case NE.partition (maybe False (== bs) . bounds) ts of
+             (matches, ts') -> unionWith f t (mconcat matches) :| ts'
+  (True, False) -> case NE.partition (`contains` t) ts of
+             ([],        _) -> let (rs, rest) = NE.partition (liftA2 (&&) (overlapping t) isRegion) ts
+                                in unionWith f t (mconcat rs) :| rest
+             (parents, ts') -> unionWith f t (mconcat parents) :| ts'
+  (False, True) -> case NE.partition (overlapping t) ts of
+             ([],        _)  -> let (best :| rest) = selectChild in unionWith f t best :| rest
+             (_,        [])  -> let (best :| rest) = selectChild in unionWith f t best :| rest
+             (siblings, ts') -> unionWith f t (mconcat siblings) :| ts'
+  (False, False) -> let (best :| rest) = selectChild in unionWith f t best :| rest
+  where
+    t = Leaf bs a
+    selectChild = NE.sortBy (comparing (expansion t)) ts
 
 isRegion :: RTree i a -> Bool
 isRegion Region{} = True
@@ -299,3 +315,13 @@ scaleQuery f q = L.foldl' go q dimensions
                              mid = (mn + mx) `div` 2
                              diff = (size * f) `div` 2
                           in (set (runLens dim) (mid - diff) lb, set (runLens dim) (mid + diff) ub)
+
+structure :: (Show i, Show a) => RTree i a -> Tree.Forest String
+structure t = case t of
+  Tip -> []
+  Leaf i a     -> node (show i <> " => " <> show a) []
+  Region bs ts -> node (show bs) (NE.toList ts >>= structure)
+ where node = (pure .) . Tree.Node
+
+drawTree :: (Show i, Show a) => RTree i a -> String
+drawTree = Tree.drawForest . structure

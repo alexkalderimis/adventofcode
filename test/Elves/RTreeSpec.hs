@@ -242,6 +242,12 @@ spec = describe "Elves.RTree" $ parallel $ do
         lookup (2,3) (a <> b) `shouldBe` lookup (2,3) a
       it "has the value of the LHS when the LHS is b" $ do
         lookup (2,3) (b <> a) `shouldBe` lookup (2,3) b
+      describe "deeply nested entries" $ do
+        let d1_tree = index . flip zip (repeat ()) . fmap pair
+            t1 = d1_tree [(-15,-10),(0,5),(4,7),( 9,18),(10,20),(15,16),(17,25)] 
+            t2 = d1_tree [(-15, -9),(1,6),(5,8),(10,19),(11,21),(15,16),(18,26)] 
+        specify "<> acts like set-union" $ do
+          size (t1 <> t2) === (size t1) + (size t2) - 1
 
     describe "counter-example-1" $ do
       let a = Region (-2,3) (Leaf (-2,1) False :| [Leaf (3,3) True])
@@ -290,18 +296,12 @@ spec = describe "Elves.RTree" $ parallel $ do
       it "can combine these leaves-depth" $ property $ do
         mconcat [a,b,c,d,e,f] `shouldSatisfy` ((3 ==) . depth)
 
-    it "increases-size" $ property $ \t i -> do
+    it "increases-size" $ QC.within 100000 $ \t i -> do
       let delta = maybe 1 (pure 0) (lookup (i,i) t)
           t' = insertPoint (i :: Dim3) () t
       size t + delta `shouldBe` size t'
-    specify "makes-queries-work" $ property $ \t i ->
+    specify "makes-queries-work" $ QC.within 100000 $ \t i ->
       query1 i (insertPoint i () t) == [(i :: Dim3,())]
-    describe "set-like behaviour" $ do
-      let d1_tree = index . flip zip (repeat ()) . fmap pair
-          t1 = d1_tree [(0,5),(4,7),( 9,18),(10,20),(15,16),(17,25)] 
-          t2 = d1_tree [(1,6),(5,8),(10,19),(11,21),(15,16),(18,26)] 
-      specify "<> acts like set-union" $ do
-        size (t1 <> t2) === (size t1) + (size t2) - 1
                     
     describe "sub-regions" $ do
       let t = Region (1,10) $ NE.fromList [ Region (1,3)  $ NE.fromList [Leaf (dbl 1) (), Leaf (dbl 3) ()]
