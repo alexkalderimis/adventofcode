@@ -115,7 +115,7 @@ maxRegionSize t = let rs = subregions t
                    in maximum (length rs : fmap maxRegionSize rs)
 
 tree :: [Dim3] -> Dim3Set
-tree = index . flip zip (repeat ()) . fmap dbl
+tree = RT.fromList . flip zip (repeat ()) . fmap dbl
 
 depth :: RTree i a -> Int
 depth Tip = 0
@@ -127,7 +127,7 @@ dbl = (,) <$> id <*> id
 
 spec :: Spec
 spec = describe "Elves.RTree" $ parallel $ do
-  let index' = index . fmap (first dbl)
+  let index' = RT.fromList . fmap (first dbl)
   describe "size" $ do
     it "always has the size of the elements you put in it" $ property $ \(Unique elems) ->
       let t = index' elems
@@ -147,8 +147,8 @@ spec = describe "Elves.RTree" $ parallel $ do
       let t = index' (e : elems)
        in query1 (fst e) t === [e]
     describe "any strategy" $ do
-      it "no-false-negatives" $ property $ \strategy e elems ->
-        let t = index [(getCube x, ()) | x <- e : elems ]
+      it "no-false-negatives" $ property $ \strategy e elems -> QC.within 10000 $
+        let t = RT.fromList [(getCube x, ()) | x <- e : elems ]
          in (getCube e, ()) `elem` query strategy (getCube e) t
 
     describe "QueryStrategy" $ do
@@ -182,10 +182,10 @@ spec = describe "Elves.RTree" $ parallel $ do
           which ("does not find E overlapping " <> [x]) (search i >>> shouldNotFind 'E')
 
     describe "lookup" $ do
-      specify "We can find anything present in the tree" $ property $ \(Cube bs) x t ->
+      specify "We can find anything present in the tree" $ property $ \(Cube bs) x t -> QC.within 10000 $
         lookup bs (Leaf bs x <> t) === Just (x :: Word)
-      specify "We cannot find anything not present in the tree" $ property $ \(Cube bs) xs ->
-        let t = index (filter ((/= bs) . fst) xs)
+      specify "We cannot find anything not present in the tree" $ property $ \(Cube bs) xs -> QC.within 10000 $
+        let t = RT.fromList (filter ((/= bs) . fst) xs)
          in lookup bs t === (Nothing :: Maybe Word)
 
     it "expanding a query never makes it less specific" $ property $ \e elems ->
@@ -243,7 +243,7 @@ spec = describe "Elves.RTree" $ parallel $ do
       it "has the value of the LHS when the LHS is b" $ do
         lookup (2,3) (b <> a) `shouldBe` lookup (2,3) b
       describe "deeply nested entries" $ do
-        let d1_tree = index . flip zip (repeat ()) . fmap pair
+        let d1_tree = RT.fromList . flip zip (repeat ()) . fmap pair
             t1 = d1_tree [(-15,-10),(0,5),(4,7),( 9,18),(10,20),(15,16),(17,25)] 
             t2 = d1_tree [(-15, -9),(1,6),(5,8),(10,19),(11,21),(15,16),(18,26)] 
         specify "<> acts like set-union" $ do
@@ -296,11 +296,76 @@ spec = describe "Elves.RTree" $ parallel $ do
       it "can combine these leaves-depth" $ property $ do
         mconcat [a,b,c,d,e,f] `shouldSatisfy` ((3 ==) . depth)
 
-    it "increases-size" $ QC.within 100000 $ \t i -> do
+    it "increases-size" $ property $ \t i -> QC.within 100000 $ do
       let delta = maybe 1 (pure 0) (lookup (i,i) t)
           t' = insertPoint (i :: Dim3) () t
       size t + delta `shouldBe` size t'
-    specify "makes-queries-work" $ QC.within 100000 $ \t i ->
+
+    it "handles this other quick-check counterexample" $ QC.within 100000 $ do
+      let objects =    [(((-59,-49,-29),(-36,-36,-12)), 'A')
+                       ,(((-55,-29,-31),(-14,-23,-16)), 'B')
+                       ,(((-29,-51,-33),(-4,-49,3)),    'C')
+                       ,(((-44,-16,-13),(40,18,25)),    'D')
+                       ,(((-11,-56,-15),(-9,19,4)),     'E')
+                       ,(((-10,-60,-20),(21,-13,-16)),  'F')
+                       ,(((-58,3,23),(4,13,32)),        'G')
+                       ,(((-48,-15,-9),(-17,-10,55)),   'H')
+                       ,(((-36,-47,2),(-8,21,37)),      'I')
+                       ,(((-54,4,-24),(15,9,54)),       'J')
+                       ,(((-47,-3,14),(31,7,57)),       'K')
+                       ,(((-42,-4,-1),(42,16,28)),      'L')
+                       ,(((-47,-49,39),(59,1,44)),      'M')
+                       ,(((-58,14,56),(-26,45,61)),     'N')
+                       ,(((-56,26,34),(30,34,35)),      'O')
+                       ,(((-29,15,24),(31,31,52)),      'P')
+                       ,(((-37,-52,45),(56,72,49)),     'Q')
+                       ,(((-5,-5,32),(26,46,45)),       'R')
+                       ,(((0,31,47),(13,37,56)),        'S')
+                       ,(((-58,-1,-35),(-23,35,38)),    'T')
+                       ,(((-46,6,-47),(1,36,12)),       'U')
+                       ,(((-42,0,-50),(-22,51,-36)),    'V')
+                       ,(((-52,30,-45),(60,54,-27)),    'W')
+                       ,(((-44,14,16),(24,64,38)),      'X')
+                       ,(((-36,-30,-49),(8,51,8)),      'Y')
+                       ,(((-50,32,60),(47,64,73)),      'Z')
+                       ,(((-17,47,-3),(37,63,16)),      'a')
+                       ,(((-38,27,8),(75,63,41)),       'b')
+                       ,(((-4,21,40),(26,76,42)),       'c')
+                       ,(((6,43,34),(14,44,35)),        'd')
+                       ,(((4,3,13),(32,48,62)),         'e')
+                       ,(((38,29,-47),(72,41,79)),      'f')
+                       ,(((40,41,35),(65,68,37)),       'g')
+                       ,(((-8,35,-59),(59,35,-3)),      'h')
+                       ,(((-1,51,-41),(22,67,59)),      'i')
+                       ,(((34,-21,-40),(52,54,-34)),    'j')
+                       ,(((47,44,-40),(63,52,-26)),     'k')
+                       ,(((48,34,-52),(71,82,-39)),     'l')
+                       ,(((59,42,-51),(61,81,-46)),     'm')
+                       ,(((53,43,54),(90,90,66)),       'n')
+                       ,(((-32,-22,10),(54,18,40)),     'o')
+                       ,(((-30,-3,26),(58,2,49)),       'p')
+                       ,(((19,-39,35),(43,60,36)),      'q')
+                       ,(((21,-19,28),(62,-1,30)),      'r')
+                       ,(((36,-41,31),(59,-37,36)),     's')
+                       ,(((60,-13,-15),(68,20,60)),     't')
+                       ,(((-25,-54,-22),(46,-18,32)),   'u')
+                       ,(((-12,-33,-47),(39,46,-29)),   'v')
+                       ,(((7,-29,-35),(18,-23,-30)),    'w')
+                       ,(((-1,-48,-11),(51,-42,22)),    'x')
+                       ,(((49,-31,-17),(56,-10,5)),     'y')
+                       ,(((58,-3,-28),(69,28,56)),      'z')
+                       ,(((57,-57,42),(69,36,53)),      'α')
+                       ,(((52,55,-32),(65,100,112)),    'β')
+                       ,(((58,54,28),(90,95,55)),       'γ')
+                       ]
+      let t = RT.fromList objects
+          t' = mconcat [Leaf bs lbl | (bs, lbl) <- objects]
+      -- putStrLn (RT.drawTree t)
+      -- putStrLn $ RT.drawTree $ t'
+      -- length (query Overlapping ((0,0,0),(0,0,0)) t') `shouldBe` 0
+      size (insertPoint (0,0,0) 'θ' t) `shouldBe` 56
+
+    specify "makes-queries-work" $ property $ \t i -> QC.within 100000 $
       query1 i (insertPoint i () t) == [(i :: Dim3,())]
                     
     describe "sub-regions" $ do
@@ -357,19 +422,75 @@ spec = describe "Elves.RTree" $ parallel $ do
                                             ,((1,2,1), 1)
                                             ]
 
+  describe "stack-of-cards" $ do
+    -- test that we can use an RTree where every object overlaps with every
+    -- other object. As an example, imagine a skewed stack of cards:
+    --
+    --  +---+
+    --  | +---+
+    --  | | +---+
+    --  | | |   |
+    --  +-| |   |
+    --    +-|   |
+    --      +---+
+    -- In this case every card overlaps every other card, but they do not cover
+    -- all the same points.
+    let mkCard x y a = ( ((x,y),(x + (20 :: Int), y + (100 :: Int))), a )
+        cards = zipWith (\p chr -> mkCard p p chr) [1 .. 20] ['a' ..]
+        tests t = do
+          let limit = 100 * 1000 -- 1ms per test
+          it "can used to build a tree" $ QC.within 1000 $ do
+            size t `shouldBe` length cards
+          it "can select a known card"
+            $ QC.within limit $ QC.forAll (QC.elements cards) $ \card -> 
+              RT.lookup (fst card) t === Just (snd card)
+          it "can overwrite a specific card"
+            $ QC.within limit $ QC.forAll (QC.elements cards) $ \card -> 
+              let t' = insertWith pure (fst card) 'X' t
+               in size t' === size t
+          it "an overwritten card stores the correct value"
+            $ QC.within limit $ QC.forAll (QC.elements cards) $ \card -> 
+              let t' = insertWith pure (fst card) 'X' t
+               in RT.lookup (fst card) t' === Just 'X'
+          it "can find the cards beneath a card"
+            $ QC.within limit $ QC.forAll (QC.elements cards) $ \card -> 
+              let origin = fst . fst $ card
+                  r = snd <$> RT.query Overlapping (origin, origin) t
+               in r === ['a' .. snd card]
+          it "knows all cards overlap each other"
+            $ QC.within limit $ QC.forAll (QC.elements cards) $ \card -> 
+              let r = snd <$> RT.query Overlapping (fst card) t
+               in r === fmap snd cards
+          it "can insert any additional card"
+            $ let origins = fst . fst <$> cards
+                  newOrigin = arbitrary `suchThat` (`notElem` origins)
+               in QC.within limit $ QC.forAll newOrigin $ \(x,y) -> 
+                  let card = mkCard x y 'X'
+                      t' = insertWith pure (fst card) (snd card) t
+                   in size t' === (size t + 1)
+    describe "fromList" (tests $ RT.fromList cards)
+    describe "mconcat" (tests $ mconcat [Leaf bs a | (bs,a) <- cards])
+
   describe "Laws" $ do
     describe "1D-Bool"  $ do
-      monoid (comparesEq :: Comparator (RTree Int Bool))
-      traversable (cast :: Cast (RTree Int Bool))
+      let oneDB = (cast :: Cast (RTree Int Bool))
+          eq = comparesEq :: Comparator (RTree Int Bool)
+      monoid eq
+      traversable oneDB
       describe "counter-example" $ do
-        let a = Leaf (1,4) False
-            b = Region (-5,6) (RT.sortKids (Leaf (3,6) False :| [Leaf (-5,3) True,Leaf (0,1) True]))
-            c = Region (3,10) (RT.sortKids (Leaf (4,7) False :| [Leaf (5,10) False,Leaf (3,6) True]))
-            eq = comparesEq :: Comparator (RTree Int Bool)
+        let a = RT.fromList [((1,4), False)]
+            b = RT.fromList [((3,6), False), ((-5,3), True), ((0,1), True)]
+            c = RT.fromList [((4,7), False), ((5,10), False), ((3,6), True)]
             l_assoc = (a <> b) <> c
             r_assoc = a <> (b <> c)
         it "has same size" $ size l_assoc === size r_assoc
         it "comparesEq" $ (l_assoc `eq` r_assoc)
+      describe "counter-example-2" $ do
+        let t = oneDB $ RT.fromList [((-62,-19),False),((39,47),False),((53,77),True),((61,68),True),((67,74),False)]
+        it "has the correct size" $ QC.within 10000 $ do
+          size t == 5
+        it "does not change when adding mempty" $ QC.within 10000 $ do
+          (mempty <> t) `eq` t
     describe "Dim3Set"  $ do
       monoid (comparesEq :: Comparator Dim3Set)
       traversable (cast :: Cast Dim3Set)
