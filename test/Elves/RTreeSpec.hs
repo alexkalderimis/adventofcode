@@ -32,10 +32,12 @@ type Dim3Set = RTree (Int,Int,Int) ()
 
 newtype Unique a = Unique { getUnique :: [a] } deriving (Show)
 
-instance (Arbitrary a, Ord a) => Arbitrary (Unique a) where
-  arbitrary = Unique . L.nub . getSorted <$> arbitrary
+instance (Arbitrary a, Eq a) => Arbitrary (Unique a) where
+  arbitrary = Unique . L.nub <$> arbitrary
 
-newtype Cube = Cube { getCube :: ((Int,Int,Int), (Int,Int,Int)) } deriving (Show, Eq)
+newtype Cube = Cube
+  { getCube :: ((Int,Int,Int), (Int,Int,Int))
+  } deriving (Show, Eq)
 
 cubeSize :: Cube -> Int
 cubeSize (Cube bs) = Ix.rangeSize bs
@@ -125,18 +127,36 @@ depth (Region _ ts) = 1 + maximum (depth <$> ts)
 dbl :: a -> (a,a)
 dbl = (,) <$> id <*> id
 
+index' = RT.fromList . fmap (first dbl)
+
 spec :: Spec
 spec = describe "Elves.RTree" $ parallel $ do
-  let index' = RT.fromList . fmap (first dbl)
-  describe "size" $ do
-    it "always has the size of the elements you put in it" $ property $ \(Unique elems) ->
-      let t = index' elems
-       in size (t :: Dim3Set) == length elems
+  sizeSpec
+  expandSpec
+  querySpec
+  lookupSpec
+  withinSpec
+  expandQuerySpec
+  nearestNeighbourSpec
+  nearestNeighbourKSpec
+  insertSpec
+  maxPageSizeSpec
+  nullSpec
+  deleteSpec
+  sizeWithSpec
+  insertWithSpec
+  stackOfCardsSpec
+  lawsSpec
 
-  describe "expandB" $ do
+sizeSpec = describe "size"
+  $ it "always has the size of the elements you put in it"
+  $ property $ \(Unique elems) ->
+    let t = index' elems in size (t :: Dim3Set) == length elems
+
+expandSpec = describe "expandB" $ do
     it "is commutative" $ property $ \(Cube a) (Cube b) -> expandB a b === expandB b a
 
-  describe "query" $ do
+querySpec = describe "query" $ do
     it "no-false-positives" $ property $ \e elems ->
       let t = tree $ filter (/= e) elems
        in query1 e t === []
@@ -181,13 +201,6 @@ spec = describe "Elves.RTree" $ parallel $ do
         forM_ [a,b,c,d,f] $ \(Leaf i x) -> do
           which ("does not find E overlapping " <> [x]) (search i >>> shouldNotFind 'E')
 
-    describe "lookup" $ do
-      specify "We can find anything present in the tree" $ property $ \(Cube bs) x t -> QC.within 10000 $
-        lookup bs (Leaf bs x <> t) === Just (x :: Word)
-      specify "We cannot find anything not present in the tree" $ property $ \(Cube bs) xs -> QC.within 10000 $
-        let t = RT.fromList (filter ((/= bs) . fst) xs)
-         in lookup bs t === (Nothing :: Maybe Word)
-
     it "expanding a query never makes it less specific" $ property $ \e elems ->
       let t = index' (e : elems)
        in (first dbl e) `elem` query Within (expandQuery 3 $ (fst e, fst e)) (t :: Dim3Set)
@@ -198,8 +211,16 @@ spec = describe "Elves.RTree" $ parallel $ do
                                                          ])
       query Within ((-3,-3,-3,-3),(3,3,3,3)) t `shouldSatisfy` elem (dbl (0,0,0,0), ())
 
+lookupSpec = describe "lookup" $ do
+      specify "We can find anything present in the tree" $ property $ \(Cube bs) x t -> QC.within 10000 $
+        lookup bs (Leaf bs x <> t) === Just (x :: Word)
+      specify "We cannot find anything not present in the tree" $ property $ \(Cube bs) xs -> QC.within 10000 $
+        let t = RT.fromList (filter ((/= bs) . fst) xs)
+         in lookup bs t === (Nothing :: Maybe Word)
 
-  describe "within" $ do
+
+
+withinSpec = describe "within" $ do
     specify "all cubes that are within other cubes also overlap" $ property $ \(CubeWithCube (Cube a) (Cube b)) ->
       overlaps a b
     specify "all points in cube are entirely within it" $ property $ \(CubeWithPoint cube p) ->
@@ -210,11 +231,11 @@ spec = describe "Elves.RTree" $ parallel $ do
     it "knows that (0,-4,0,0),(0,4,0,0) is not within (-3,-3,-3,-3),(3,3,3,3)" $ do
       ((-3,-3,-3),(3,3,3)) `shouldNotSatisfy` within ((0,-4,0),(0,4,0))
 
-  describe "expandQuery" $ do
+expandQuerySpec = describe "expandQuery" $ do
     it "always includes the query" $ property $ \(NonNegative n) q ->
       Ix.inRange (expandQuery n (q,q :: Dim3)) q
 
-  describe "nearestNeighbour" $ do
+nearestNeighbourSpec = describe "nearestNeighbour" $ do
     specify "in a tree of size 2, one point is always the NN of the other"
       $ property $ \h a b -> 
         (a == b .||. nearestNeighbour (measure h) a (tree [a,b]) == Just (dbl b,()))
@@ -226,12 +247,12 @@ spec = describe "Elves.RTree" $ parallel $ do
             mnn = nearestNeighbour f x t
          in maybe False ((f x y >=) . f x . fst . fst) mnn
 
-  describe "nearestNeighbourK" $ do
+nearestNeighbourKSpec = describe "nearestNeighbourK" $ do
     specify "it returns values in ascending order" $ property $ \h (NonNegative k) p t ->
       let matches = mindist p . fst <$> nearestNeighbourK (measure h) k p (t :: Dim3Set)
        in and [ a <= b | (a,b) <- zip matches (tail matches) ]
 
-  describe "insert" $ do
+insertSpec = describe "insert" $ do
 
     describe "duplicate entry" $ do
       let a = Region ( 0,3) (Leaf ( 0,1) True  :| [Leaf (2,3) False])
@@ -379,7 +400,7 @@ spec = describe "Elves.RTree" $ parallel $ do
         let t' = insertPoint (5 :: Int) () t
         length (subregions t') `shouldBe` 3
 
-  describe "maxPageSize" $ do
+maxPageSizeSpec = describe "maxPageSize" $ do
     let maxRegionSize t = case t of Region _ ts -> maximum (NE.cons (length ts) (fmap maxRegionSize ts))
                                     _ -> 0
 
@@ -389,18 +410,18 @@ spec = describe "Elves.RTree" $ parallel $ do
       let t = foldr (\i -> insertPoint (i :: Dim3) ()) Tip elems
        in maxRegionSize t <= maxPageSize
 
-  describe "null" $ do
+nullSpec = describe "null" $ do
     specify "null lists make null trees" $ property $ \ps ->
       RT.null (tree ps) == null ps
 
-  describe "delete" $ do
+deleteSpec = describe "delete" $ do
     it "reduces tree size" $ property $ \p ps ->
       let t = tree (p:ps)
        in size t > size (delete (dbl p) t)
     it "makes points impossible to find" $ property $ \p ps ->
       null (query1 p . delete (dbl p) $ tree (p:ps))
 
-  describe "sizeWith" $ do
+sizeWithSpec = describe "sizeWith" $ do
     specify "is always extent t when adding a Tip" $ property $ \t ->
       sizeWith t RT.empty == extent (t :: Dim3Set)
     specify "is always >= extent t when adding a tree" $ property $ \t0 t1 ->
@@ -408,7 +429,7 @@ spec = describe "Elves.RTree" $ parallel $ do
     specify "can calculate the new size" $ do
       sizeWith (Leaf (dbl (9,9,9)) ()) (tree [(0,0,0),(3,1,5)]) `shouldBe` 1000
 
-  describe "insertWith" $ do
+insertWithSpec = describe "insertWith" $ do
     specify "it can operate as counting structure" $ property $ do
       let t = L.foldl' (\t p -> RT.insertWith (+) (dbl (p :: Dim3)) (1 :: Int) t) RT.empty
                    [(0,0,0),(0,0,1),(0,1,0),(1,2,1)
@@ -422,7 +443,7 @@ spec = describe "Elves.RTree" $ parallel $ do
                                             ,((1,2,1), 1)
                                             ]
 
-  describe "stack-of-cards" $ do
+stackOfCardsSpec = describe "stack-of-cards" $ do
     -- test that we can use an RTree where every object overlaps with every
     -- other object. As an example, imagine a skewed stack of cards:
     --
@@ -438,7 +459,7 @@ spec = describe "Elves.RTree" $ parallel $ do
     let mkCard x y a = ( ((x,y),(x + (20 :: Int), y + (100 :: Int))), a )
         cards = zipWith (\p chr -> mkCard p p chr) [1 .. 20] ['a' ..]
         tests t = do
-          let limit = 100 * 1000 -- 1ms per test
+          let limit = 100 * 2000 -- 2ms per test, generous timeout
           it "can used to build a tree" $ QC.within 1000 $ do
             size t `shouldBe` length cards
           it "can select a known card"
@@ -447,7 +468,7 @@ spec = describe "Elves.RTree" $ parallel $ do
           it "can overwrite a specific card"
             $ QC.within limit $ QC.forAll (QC.elements cards) $ \card -> 
               let t' = insertWith pure (fst card) 'X' t
-               in size t' === size t
+               in size t' === size t .&&. t =/= t'
           it "an overwritten card stores the correct value"
             $ QC.within limit $ QC.forAll (QC.elements cards) $ \card -> 
               let t' = insertWith pure (fst card) 'X' t
@@ -471,26 +492,66 @@ spec = describe "Elves.RTree" $ parallel $ do
     describe "fromList" (tests $ RT.fromList cards)
     describe "mconcat" (tests $ mconcat [Leaf bs a | (bs,a) <- cards])
 
-  describe "Laws" $ do
+lawsSpec = describe "Laws" $ do
     describe "1D-Bool"  $ do
       let oneDB = (cast :: Cast (RTree Int Bool))
           eq = comparesEq :: Comparator (RTree Int Bool)
       monoid eq
       traversable oneDB
+
+      let sgCounter a b c = do
+            let l_assoc = (a <> b) <> c
+                r_assoc = a <> (b <> c)
+                t_o = 1000
+            it "has same size" $ QC.within t_o (size l_assoc === size r_assoc)
+            it "comparesEq" $ QC.within t_o (l_assoc `eq` r_assoc)
+
       describe "counter-example" $ do
-        let a = RT.fromList [((1,4), False)]
-            b = RT.fromList [((3,6), False), ((-5,3), True), ((0,1), True)]
-            c = RT.fromList [((4,7), False), ((5,10), False), ((3,6), True)]
-            l_assoc = (a <> b) <> c
-            r_assoc = a <> (b <> c)
-        it "has same size" $ size l_assoc === size r_assoc
-        it "comparesEq" $ (l_assoc `eq` r_assoc)
+        sgCounter (RT.fromList [((1,4), False)])
+                  (RT.fromList [((3,6), False), ((-5,3), True), ((0,1), True)])
+                  (RT.fromList [((4,7), False), ((5,10), False), ((3,6), True)])
+
       describe "counter-example-2" $ do
         let t = oneDB $ RT.fromList [((-62,-19),False),((39,47),False),((53,77),True),((61,68),True),((67,74),False)]
         it "has the correct size" $ QC.within 10000 $ do
           size t == 5
         it "does not change when adding mempty" $ QC.within 10000 $ do
           (mempty <> t) `eq` t
+
+      describe "counter-example-3" $ do
+        sgCounter 
+          (RT.fromList [((-1,1),True)])
+          (RT.fromList [((-1,3),False)])
+          (RT.fromList [((-1,0),False),((-1,0),False),((2,3),True)])
+
+      describe "counter-example-4" $ do
+        sgCounter 
+          (RT.fromList [((5,8),False)])
+          (RT.fromList [((4,5),True),((6,9),False)])
+          (RT.fromList [((4,9),False),((5,8),True)])
+
+      describe "counter-example-5" $ do
+        sgCounter
+          (RT.fromList [((-1, 9),True)
+                       ,(( 4, 5),False)
+                       ,(( 2, 8),True)
+                       ,(( 5,11),False)
+                       ,(( 7, 9),False)
+                       ,((11,14),True)
+                       ])
+          (RT.fromList [((4,11),True)])
+          (RT.fromList [((-7, 4),True)
+                       ,((-5, 2),False)
+                       ,((-3, 7),True)
+                       ,(( 0, 7),False)
+                       ,(( 5, 5),True)
+                       ,(( 4, 8),False)
+                       ,(( 6,13),False)
+                       ,(( 8,13),True)
+                       ,((10,10),False)
+                       ,(( 9,13),False)
+                       ])
+
     describe "Dim3Set"  $ do
       monoid (comparesEq :: Comparator Dim3Set)
       traversable (cast :: Cast Dim3Set)
