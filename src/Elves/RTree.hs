@@ -64,12 +64,9 @@ instance (Show i, Show a) => Show (RTree i a) where
 
 instance (Arbitrary i, Arbitrary a, Ix i, Coord i) => Arbitrary (RTree i a) where
   arbitrary = fmap (fromList . fmap (first getValidBounds)) arbitrary
-  shrink (Region bs ts) = do
-    ts' <- missing1 (NE.toList ts)
-    ts'' <- ts' : shrinkList ts'
-    let t = maybe Tip (Region bs) (NE.nonEmpty ts'')
-    return (compact t)
-  shrink _ = []
+  shrink t = do
+    pairs <- missing1 (assocs t)
+    return (fromList pairs)
 
 shrinkList :: Arbitrary a => [a] -> [[a]]
 shrinkList [] = [[]]
@@ -256,8 +253,9 @@ insertChild f bs a ts = case (length ts < maxPageSize, none isRegion ts) of
   (True, True) -> case NE.partition (maybe False (== bs) . bounds) ts of
              (matches, ts') -> unionWith f t (mconcat matches) :| ts'
   (True, False) -> case divide (`contains` t) of
-             Nothing -> let (rs, rest) = NE.partition overlappingReg ts
-                         in unionWith f t (mconcat rs) :| rest
+             Nothing -> case divide overlappingReg of
+                          Just (rs, rest) -> unionWith f t (mconcat rs) :| rest
+                          Nothing -> fallback
              Just (parents, ts') -> unionWith f t (mconcat parents) :| ts'
   (False, True) -> case divide (overlapping t) of
              Nothing              -> fallback
