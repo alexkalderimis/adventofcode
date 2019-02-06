@@ -548,15 +548,10 @@ oneDBoolCounterExamples = do
 
   describe "counter-example-5" $ do
     sgCounter
-      (RT.fromList [((-1, 9),True)
-                   ,((11,14),True)
-                   ])
+      (RT.fromList [((-1, 9),True)])
       (RT.fromList [])
-      (RT.fromList [((-7, 4),True)
-                   ,((-5, 2),False)
-                   ,((-3, 7),True)
+      (RT.fromList [((-5, 2),False)
                    ,(( 0, 7),False)
-                   ,(( 5, 5),True)
                    ,(( 8,13),True)
                    ,((10,10),False)
                    ,(( 9,13),False)
