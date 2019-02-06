@@ -1,19 +1,19 @@
-{-# LANGUAGE DeriveFunctor       #-}
-{-# LANGUAGE DeriveGeneric       #-}
-{-# LANGUAGE FlexibleInstances   #-}
+{-# LANGUAGE DeriveFunctor     #-}
+{-# LANGUAGE DeriveGeneric     #-}
+{-# LANGUAGE FlexibleInstances #-}
 
 module Elves.RTree where
 
-import           Prelude                   hiding (null, lookup)
+import           Prelude                   hiding (lookup, null)
 
-import Control.Arrow (first)
+import           Control.Applicative       hiding (empty)
+import           Control.Arrow             (first)
 import           Control.DeepSeq           (NFData (..))
 import           Control.Lens              hiding (contains, index, indexed)
-import           Control.Applicative
 import           Data.Foldable             (Foldable (foldMap))
 import qualified Data.Foldable             as F
-import qualified Data.Traversable          (Traversable(traverse))
-import Data.Functor.Classes (Eq1(..), Eq2(..))
+import           Data.Function             (on)
+import           Data.Functor.Classes      (Eq1 (..), Eq2 (..))
 import           Data.Hashable             (Hashable)
 import           Data.Heap                 (Entry (..), Heap)
 import qualified Data.Heap                 as Heap
@@ -23,21 +23,24 @@ import qualified Data.List                 as L
 import           Data.List.NonEmpty        (NonEmpty (..))
 import qualified Data.List.NonEmpty        as NE
 import           Data.Maybe
-import           Data.Function (on)
-import           Data.Monoid hiding (First(..), (<>))
-import           Data.Semigroup
+import           Data.Monoid               hiding (First (..), (<>))
 import           Data.Ord
+import           Data.Semigroup
+import qualified Data.Traversable          (Traversable (traverse))
+import qualified Data.Tree                 as Tree
 import           GHC.Generics              (Generic)
-import qualified Data.Tree as Tree
 
-import           Test.QuickCheck.Arbitrary (Arbitrary (arbitrary, shrink), arbitraryBoundedEnum)
-import           Test.QuickCheck.Gen (suchThat)
+import           Test.QuickCheck.Arbitrary (Arbitrary (arbitrary, shrink),
+                                            arbitraryBoundedEnum)
+import           Test.QuickCheck.Gen       (suchThat)
 
 import           Elves.Coord
 
 type Bounds i = (i,i)
 
-newtype ValidBounds i = ValidBounds { getValidBounds :: (i,i) } deriving (Show, Eq)
+newtype ValidBounds i = ValidBounds
+  { getValidBounds :: (i,i)
+  } deriving (Show, Eq)
 
 instance (Arbitrary i, Coord i) => Arbitrary (ValidBounds i) where
   arbitrary = do
@@ -51,13 +54,34 @@ data RTree i a
   = Tip
   | Leaf (Bounds i) a
   | Region (Bounds i) (NonEmpty (RTree i a))
-  deriving (Show, Functor, Generic)
+  deriving (Functor, Generic)
+
+instance (Show i, Show a) => Show (RTree i a) where
+  showsPrec d t = showParen (d > app_prec) $
+                    showString "fromList "
+                  . showsPrec (app_prec+1) (assocs t)
+         where app_prec = 10
 
 instance (Arbitrary i, Arbitrary a, Ix i, Coord i) => Arbitrary (RTree i a) where
-  arbitrary = fmap (index . fmap (first getValidBounds)) arbitrary
-  shrink (Region bs ts) = case ts of t :| [] -> [t]
-                                     t :| ts' -> fmap (\rst -> compact $ Region bs (t :| rst)) (tail $ L.tails ts')
+  arbitrary = fmap (fromList . fmap (first getValidBounds)) arbitrary
+  shrink (Region bs ts) = do
+    ts' <- missing1 (NE.toList ts)
+    ts'' <- ts' : shrinkList ts'
+    let t = maybe Tip (Region bs) (NE.nonEmpty ts'')
+    return (compact t)
   shrink _ = []
+
+shrinkList :: Arbitrary a => [a] -> [[a]]
+shrinkList [] = [[]]
+shrinkList (x:xs) = let xss = shrinkList xs
+                     in case shrink x of
+                          []     -> xss
+                          shrunk -> [x' : xs' | x' <- shrunk, xs' <- xss ]
+
+missing1 :: [a] -> [[a]]
+missing1 xs = [pref ++ drop 1 suff | n <- [0 .. length xs - 1]
+                                 , let (pref,suff) = L.splitAt n xs
+              ]
 
 instance (Hashable i, Hashable a) => Hashable (RTree i a)
 
@@ -74,10 +98,10 @@ instance Traversable (RTree i) where
   traverse f (Region bs ts) = Region bs <$> sequenceA (traverse f <$> ts)
 
 instance (Ix i, Coord i) => Semigroup (RTree i a) where
-  a <> b = unionWith pure a b
+  (<>) = union
 
 instance (Ix i, Coord i) => Monoid (RTree i a) where
-  mempty = Tip
+  mempty = empty
   mappend = (<>)
 
 instance Eq2 RTree where
@@ -91,15 +115,13 @@ instance Eq i => Eq1 (RTree i) where
     liftEq = liftEq2 (==)
 
 instance (Ord i, Ord a) => Ord (RTree i a) where
-    compare t1 t2 = compare (L.sort $ assocs t1) (L.sort $ assocs t2)
+  compare t1 t2 = let sorted = L.sortBy (comparing fst) . assocs
+                   in compare (sorted t1) (sorted t2)
 
--- Eq instance is fairly useless, as it exposes internal
--- structure as an important semantic difference. Instead,
--- use compare a b == Eq, which requires Ord, but is more
--- reliable. This sadly unlawful state of affairs is mostly
--- provided for testing and other conveniences.
-instance (Eq i, Eq a) => Eq (RTree i a) where
-    a == b = liftEq2 (==) (==) a b
+-- to avoid exposing internal structure, the EQ instance
+-- requires Ord instances of its components
+instance (Ord i, Ord a) => Eq (RTree i a) where
+  a == b = compare a b == EQ
 
 bounds :: RTree i a -> Maybe (Bounds i)
 bounds (Leaf b _)   = Just b
@@ -107,8 +129,8 @@ bounds (Region b _) = Just b
 bounds Tip          = Nothing
 
 indexed :: RTree i a -> RTree i (Bounds i, a)
-indexed Tip = Tip
-indexed (Leaf i a) = Leaf i (i,a)
+indexed Tip            = Tip
+indexed (Leaf i a)     = Leaf i (i,a)
 indexed (Region bs ts) = Region bs (indexed <$> ts)
 
 assocs :: RTree i a -> [((i,i),a)]
@@ -120,25 +142,44 @@ maxPageSize = 4 -- tuneable page size
 size :: RTree i a -> Int
 size = sum . fmap (pure 1)
 
-index :: (Ix i, Coord i) => [(Bounds i, a)] -> RTree i a
-index = go 0
+fromList :: (Ix i, Coord i) => [(Bounds i, a)] -> RTree i a
+fromList = fromListWith pure
+
+fromListWith :: (Coord i) => (a -> a -> a) -> [(Bounds i, a)] -> RTree i a
+fromListWith f = go 0
   where
     boundify (i:is) = L.foldl' (flip expandB) i is
+    ds = dimensions
+    dlen = length ds
     go _ [] = Tip
     go dim xs
       | n <= maxPageSize = let bs = boundify (fst <$> xs)
-                               ts = uncurry Leaf <$> xs
+                               ts = fmap (uncurry Leaf)
+                                    . uncollide
+                                    $ L.sortBy order xs
                             in region bs ts
-      | otherwise = let ds = dimensions
-                        order = let f = view $ runLens (ds !! (dim `mod` length ds))
-                                 in midPoint <$> (f . fst) <*> (f . snd)
-                        chunk = n `div` (maxPageSize `div` 2)
-                        ts = go (dim + 1) <$> chunksOf chunk (L.sortBy (comparing (order.fst)) xs)
+      | otherwise = let chunk = max maxPageSize (n `div` maxPageSize)
+                        ts = fmap (go (dim + 1))
+                             . (>>= chunksOf chunk)
+                             . L.groupBy (overlaps `on` fst)
+                             . uncollide
+                             $ L.sortBy order xs
                         bs = L.foldl1 expandB (catMaybes (bounds <$> ts))
                      in region bs ts
         where n = length xs
+              order = comparing (midpoints.fst)
               midPoint a b = (a + b) `div` 2
+              midpoints = let ixs  = fmap ((+ dim) . fst) $ zip [0 ..] ds
+                              mp bs i = let p = view $ runLens (ds !! (i `mod` dlen))
+                                            a = p (fst bs)
+                                            b = p (snd bs)
+                                         in (midPoint a b, a, b)
+                           in \bs -> fmap (mp bs) ixs
               region bs ts = maybe Tip (compact . Region bs . sortKids) (NE.nonEmpty ts)
+              uncollide (a:b:xs) = if fst a == fst b
+                                      then uncollide ((fst a, f (snd a) (snd b)) : xs)
+                                      else a : uncollide (b:xs)
+              uncollide xs = xs
 
 chunksOf :: Int -> [a] -> [[a]]
 chunksOf _ [] = []
@@ -201,7 +242,7 @@ compact t                    = t
 
 subtrees :: RTree i a -> NonEmpty (RTree i a)
 subtrees (Region _ ts) = ts
-subtrees t = pure t
+subtrees t             = pure t
 
 leaves :: RTree i a -> [RTree i a]
 leaves t = case t of
@@ -209,26 +250,37 @@ leaves t = case t of
   _           -> pure t
 
 insertChild :: (Ix i, Coord i)
-            => (a -> a -> a) -> Bounds i -> a -> NonEmpty (RTree i a) -> NonEmpty (RTree i a)
+            => (a -> a -> a) -> Bounds i -> a
+            -> NonEmpty (RTree i a) -> NonEmpty (RTree i a)
 insertChild f bs a ts = case (length ts < maxPageSize, none isRegion ts) of
   (True, True) -> case NE.partition (maybe False (== bs) . bounds) ts of
              (matches, ts') -> unionWith f t (mconcat matches) :| ts'
-  (True, False) -> case NE.partition (`contains` t) ts of
-             ([],        _) -> let (rs, rest) = NE.partition (liftA2 (&&) (overlapping t) isRegion) ts
-                                in unionWith f t (mconcat rs) :| rest
-             (parents, ts') -> unionWith f t (mconcat parents) :| ts'
-  (False, True) -> case NE.partition (overlapping t) ts of
-             ([],        _)  -> let (best :| rest) = selectChild in unionWith f t best :| rest
-             (_,        [])  -> let (best :| rest) = selectChild in unionWith f t best :| rest
-             (siblings, ts') -> unionWith f t (mconcat siblings) :| ts'
-  (False, False) -> let (best :| rest) = selectChild in unionWith f t best :| rest
+  (True, False) -> case divide (`contains` t) of
+             Nothing -> let (rs, rest) = NE.partition overlappingReg ts
+                         in unionWith f t (mconcat rs) :| rest
+             Just (parents, ts') -> unionWith f t (mconcat parents) :| ts'
+  (False, True) -> case divide (overlapping t) of
+             Nothing              -> fallback
+             Just (siblings, ts') -> unionWith f t (mconcat siblings) :| ts'
+  (False, False) -> fallback
   where
+    overlappingReg = liftA2 (&&) (overlapping t) isRegion
+    divide f = neitherNull $ NE.partition f ts
+    -- insert child into best position in the current list. This ensures that
+    -- any collisions will always be selected first, followed by overlaps.
+    fallback = let (best :| rest) = selectChild in unionWith f t best :| rest
     t = Leaf bs a
-    selectChild = NE.sortBy (comparing (expansion t)) ts
+    -- choose the child that needs the smallest expansion to contain the child,
+    -- in a tie, choose the child that is closest in extent to the child itself.
+    -- This is designed to make sure we prefer collisions to containment
+    selectChild = NE.sortBy (comparing (\x -> (expansion t x, expansion x t))) ts
+    neitherNull (xs,ys) = if L.null xs || L.null ys
+                             then Nothing
+                             else Just (xs,ys)
 
 isRegion :: RTree i a -> Bool
 isRegion Region{} = True
-isRegion _ = False
+isRegion _        = False
 
 data QueryStrategy = Precisely | Within | Overlapping deriving (Show, Eq, Bounded, Enum)
 
@@ -236,8 +288,8 @@ instance Arbitrary QueryStrategy where
   arbitrary = arbitraryBoundedEnum
 
 matches :: (Ix i, Coord i) => QueryStrategy -> Bounds i -> Bounds i -> Bool
-matches Precisely = (==)
-matches Within = within
+matches Precisely   = (==)
+matches Within      = within
 matches Overlapping = overlaps
 
 query :: (Ix i, Coord i) => QueryStrategy -> (i,i) -> RTree i a -> [(Bounds i,a)]
@@ -283,8 +335,10 @@ contains a b = fromMaybe False $ liftA2 within (bounds b) (bounds a)
 overlapping :: Coord i => RTree i a -> RTree i a -> Bool
 overlapping a b = fromMaybe False $ liftA2 overlaps (bounds a) (bounds b)
 
+-- how much bigger does rhs have to become to encompass lhs?
 expansion :: (Ix i, Coord i) => RTree i a -> RTree i a -> Int
-expansion t t' = sizeWith t t' - extent t
+expansion t t' | t' `contains` t = 0
+expansion t t' = sizeWith t t' - extent t'
 
 sizeWith :: (Ix i, Coord i) => RTree i a -> RTree i a -> Int
 sizeWith t0 t1 = maybe 0 Ix.rangeSize (liftA2 expandB (bounds t0) (bounds t1)
@@ -318,7 +372,7 @@ scaleQuery f q = L.foldl' go q dimensions
 
 structure :: (Show i, Show a) => RTree i a -> Tree.Forest String
 structure t = case t of
-  Tip -> []
+  Tip          -> []
   Leaf i a     -> node (show i <> " => " <> show a) []
   Region bs ts -> node (show bs) (NE.toList ts >>= structure)
  where node = (pure .) . Tree.Node
