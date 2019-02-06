@@ -212,17 +212,20 @@ union :: (Ix i, Coord i) => RTree i a -> RTree i a -> RTree i a
 union = unionWith pure
 
 unionWith :: (Ix i, Coord i) => (a -> a -> a) -> RTree i a -> RTree i a -> RTree i a
-unionWith f left Tip  = left
+-- the trivial cases: tips are identities of union
 unionWith f Tip right = right
+unionWith f left Tip  = left
+-- when both are leaves, we need to deal with collisions
 unionWith f l@(Leaf i a) r@(Leaf j b)
   | i == j    = Leaf i (f a b)
   | otherwise = Region (expandB i j) (sortKids (l :| pure r))
 unionWith f l r
+  -- when l overlaps r, we need to insert l into r somehow.
   | overlapping l r = compact $ case l of
-      Leaf i a -> let bs' = maybe i (expandB i) (bounds r)
-                      ts' = sortKids . insertChild f i a $ subtrees r
-                   in Region bs' ts'
-      Region{} -> F.foldl' (flip (unionWith f)) r (leaves l)
+      Leaf i a    -> let bs' = maybe i (expandB i) (bounds r)
+                         ts' = sortKids . insertChild f i a $ subtrees r
+                      in Region bs' ts'
+      Region _ ts -> F.foldl' (\a t -> unionWith f t a) r ts
   -- safe to use fromJust here, as we have guarded against Tips
   -- in the trivial cases above.
   | otherwise      = let bs' = fromJust (expandB <$> bounds l <*> bounds r)
@@ -244,30 +247,32 @@ subtrees t             = pure t
 leaves :: RTree i a -> [RTree i a]
 leaves t = case t of
   Region _ ts -> NE.toList ts >>= leaves
+  Tip         -> []
   _           -> pure t
 
 insertChild :: (Ix i, Coord i)
             => (a -> a -> a) -> Bounds i -> a
             -> NonEmpty (RTree i a) -> NonEmpty (RTree i a)
 insertChild f bs a ts = case (length ts < maxPageSize, none isRegion ts) of
-  (True, True) -> case NE.partition (maybe False (== bs) . bounds) ts of
-             (matches, ts') -> unionWith f t (mconcat matches) :| ts'
-  (True, False) -> case divide (`contains` t) of
-             Nothing -> case divide overlappingReg of
-                          Just (rs, rest) -> unionWith f t (mconcat rs) :| rest
-                          Nothing -> fallback
-             Just (parents, ts') -> unionWith f t (mconcat parents) :| ts'
-  (False, True) -> case divide (overlapping t) of
-             Nothing              -> fallback
-             Just (siblings, ts') -> unionWith f t (mconcat siblings) :| ts'
-  (False, False) -> fallback
+  (True, True)   -> insertInto $ NE.partition colliding ts
+  _              -> maybe fallback insertInto $ dividing [(`contains` t)
+                                                         ,overlappingReg
+                                                         ,(overlapping t)
+                                                         ]
   where
-    overlappingReg = liftA2 (&&) (overlapping t) isRegion
-    divide f = neitherNull $ NE.partition f ts
     -- insert child into best position in the current list. This ensures that
     -- any collisions will always be selected first, followed by overlaps.
     fallback = let (best :| rest) = selectChild in unionWith f t best :| rest
+    -- given a set of good choices, insert the child into their union
+    insertInto (best,rest) = unionWith f t (mconcat best) :| rest
+    -- the child
     t = Leaf bs a
+
+    dividing fs = L.foldl1 (<|>) (divide <$> fs)
+
+    colliding = maybe False (== bs) . bounds
+    overlappingReg = liftA2 (&&) (overlapping t) isRegion
+    divide f = neitherNull $ NE.partition f ts
     -- choose the child that needs the smallest expansion to contain the child,
     -- in a tie, choose the child that is closest in extent to the child itself.
     -- This is designed to make sure we prefer collisions to containment
