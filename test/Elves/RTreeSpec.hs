@@ -2,20 +2,20 @@
 
 module Elves.RTreeSpec (spec) where
 
-import Prelude hiding (lookup)
+import           Prelude                  hiding (lookup)
 
-import Control.Arrow (first)
-import Control.Category ((>>>))
+import           Control.Arrow            (first)
+import           Control.Category         ((>>>))
 import           Control.Concurrent       (threadDelay)
 import qualified Control.Concurrent.Async as Async
 import           Control.Exception.Base   (Exception)
-import           Data.Functor.Compose
 import           Control.Lens             hiding (index)
 import qualified Data.Foldable            as F
+import           Data.Functor.Compose
 import qualified Data.Ix                  as Ix
 import qualified Data.List                as L
+import           Data.List.NonEmpty       (NonEmpty (..))
 import qualified Data.List.NonEmpty       as NE
-import           Data.List.NonEmpty       (NonEmpty(..))
 import           Test.Hspec
 import           Test.QuickCheck          hiding (within)
 import qualified Test.QuickCheck          as QC
@@ -23,7 +23,7 @@ import qualified Test.QuickCheck.Monadic  as QCM
 
 import           Elves
 import           Elves.Coord
-import           Elves.LawsSpec 
+import           Elves.LawsSpec
 import           Elves.RTree              hiding (null)
 import qualified Elves.RTree              as RT
 
@@ -120,8 +120,8 @@ tree :: [Dim3] -> Dim3Set
 tree = RT.fromList . flip zip (repeat ()) . fmap dbl
 
 depth :: RTree i a -> Int
-depth Tip = 0
-depth Leaf{} = 1
+depth Tip           = 0
+depth Leaf{}        = 1
 depth (Region _ ts) = 1 + maximum (depth <$> ts)
 
 dbl :: a -> (a,a)
@@ -212,13 +212,25 @@ querySpec = describe "query" $ do
       query Within ((-3,-3,-3,-3),(3,3,3,3)) t `shouldSatisfy` elem (dbl (0,0,0,0), ())
 
 lookupSpec = describe "lookup" $ do
-      specify "We can find anything present in the tree" $ property $ \(Cube bs) x t -> QC.within 10000 $
-        lookup bs (Leaf bs x <> t) === Just (x :: Word)
-      specify "We cannot find anything not present in the tree" $ property $ \(Cube bs) xs -> QC.within 10000 $
-        let t = RT.fromList (filter ((/= bs) . fst) xs)
-         in lookup bs t === (Nothing :: Maybe Word)
+  let oneDB = (cast :: Cast (RTree Int Bool))
+  specify "We can find anything present in the tree"
+   $ property $ \(Cube bs) x t ->
+    lookup bs (Leaf bs x <> t) === Just (x :: Word)
 
+  specify "We cannot find anything not present in the tree"
+   $ property $ \(Cube bs) xs ->
+    let t = RT.fromList (filter ((/= bs) . fst) xs)
+     in lookup bs t === (Nothing :: Maybe Word)
 
+  specify "lookup q t === L.lookup q (assocs t)"
+    $ property $ \(ValidBounds q) t -> lookup q (oneDB t) === L.lookup q (assocs t)
+
+  specify "lookup q (a <> b) == if q `member` a then lookup q a else lookup q b"
+    $ property $ \(ValidBounds q) a b ->
+        let r = lookup q (a <> b)
+         in if RT.member q (oneDB a)
+               then r === lookup q a
+               else r === lookup q b
 
 withinSpec = describe "within" $ do
     specify "all cubes that are within other cubes also overlap" $ property $ \(CubeWithCube (Cube a) (Cube b)) ->
@@ -237,7 +249,7 @@ expandQuerySpec = describe "expandQuery" $ do
 
 nearestNeighbourSpec = describe "nearestNeighbour" $ do
     specify "in a tree of size 2, one point is always the NN of the other"
-      $ property $ \h a b -> 
+      $ property $ \h a b ->
         (a == b .||. nearestNeighbour (measure h) a (tree [a,b]) == Just (dbl b,()))
     specify "in any tree, for any heuristic no point is closer than the NN"
       $ property $ \h (NNInput x y others) ->
@@ -265,8 +277,8 @@ insertSpec = describe "insert" $ do
         lookup (2,3) (b <> a) `shouldBe` lookup (2,3) b
       describe "deeply nested entries" $ do
         let d1_tree = RT.fromList . flip zip (repeat ()) . fmap pair
-            t1 = d1_tree [(-15,-10),(0,5),(4,7),( 9,18),(10,20),(15,16),(17,25)] 
-            t2 = d1_tree [(-15, -9),(1,6),(5,8),(10,19),(11,21),(15,16),(18,26)] 
+            t1 = d1_tree [(-15,-10),(0,5),(4,7),( 9,18),(10,20),(15,16),(17,25)]
+            t2 = d1_tree [(-15, -9),(1,6),(5,8),(10,19),(11,21),(15,16),(18,26)]
         specify "<> acts like set-union" $ do
           size (t1 <> t2) === (size t1) + (size t2) - 1
 
@@ -388,7 +400,7 @@ insertSpec = describe "insert" $ do
 
     specify "makes-queries-work" $ property $ \t i -> QC.within 100000 $
       query1 i (insertPoint i () t) == [(i :: Dim3,())]
-                    
+
     describe "sub-regions" $ do
       let t = Region (1,10) $ NE.fromList [ Region (1,3)  $ NE.fromList [Leaf (dbl 1) (), Leaf (dbl 3) ()]
                                           , Region (8,10) $ NE.fromList [Leaf (dbl 8) (), Leaf (dbl 10) ()]
@@ -463,29 +475,29 @@ stackOfCardsSpec = describe "stack-of-cards" $ do
           it "can used to build a tree" $ QC.within 1000 $ do
             size t `shouldBe` length cards
           it "can select a known card"
-            $ QC.within limit $ QC.forAll (QC.elements cards) $ \card -> 
+            $ QC.within limit $ QC.forAll (QC.elements cards) $ \card ->
               RT.lookup (fst card) t === Just (snd card)
           it "can overwrite a specific card"
-            $ QC.within limit $ QC.forAll (QC.elements cards) $ \card -> 
+            $ QC.within limit $ QC.forAll (QC.elements cards) $ \card ->
               let t' = insertWith pure (fst card) 'X' t
                in size t' === size t .&&. t =/= t'
           it "an overwritten card stores the correct value"
-            $ QC.within limit $ QC.forAll (QC.elements cards) $ \card -> 
+            $ QC.within limit $ QC.forAll (QC.elements cards) $ \card ->
               let t' = insertWith pure (fst card) 'X' t
                in RT.lookup (fst card) t' === Just 'X'
           it "can find the cards beneath a card"
-            $ QC.within limit $ QC.forAll (QC.elements cards) $ \card -> 
+            $ QC.within limit $ QC.forAll (QC.elements cards) $ \card ->
               let origin = fst . fst $ card
                   r = snd <$> RT.query Overlapping (origin, origin) t
                in r === ['a' .. snd card]
           it "knows all cards overlap each other"
-            $ QC.within limit $ QC.forAll (QC.elements cards) $ \card -> 
+            $ QC.within limit $ QC.forAll (QC.elements cards) $ \card ->
               let r = snd <$> RT.query Overlapping (fst card) t
                in r === fmap snd cards
           it "can insert any additional card"
             $ let origins = fst . fst <$> cards
                   newOrigin = arbitrary `suchThat` (`notElem` origins)
-               in QC.within limit $ QC.forAll newOrigin $ \(x,y) -> 
+               in QC.within limit $ QC.forAll newOrigin $ \(x,y) ->
                   let card = mkCard x y 'X'
                       t' = insertWith pure (fst card) (snd card) t
                    in size t' === (size t + 1)
@@ -509,16 +521,25 @@ oneDBoolCounterExamples = do
   let oneDB = (cast :: Cast (RTree Int Bool))
       eq = comparesEq :: Comparator (RTree Int Bool)
       t_o = 1000
-      sgCounter a b c = do
+      sgCounter name a b c = describe name $ do
         let l_assoc = (a <> b) <> c
             r_assoc = a <> (b <> c)
+        runIO $ do
+          putStrLn name
+          putStrLn "A:"
+          putStrLn (drawTree a)
+          putStrLn "B:"
+          putStrLn (drawTree b)
+          putStrLn "C:"
+          putStrLn (drawTree c)
+
         it "has same size" $ QC.within t_o (size l_assoc === size r_assoc)
         it "comparesEq"    $ QC.within t_o (l_assoc `eq` r_assoc)
 
-  describe "counter-example-1" $ do
-    sgCounter (RT.fromList [((1,4), False)])
-              (RT.fromList [((3,6), False), ((-5,3), True), ((0,1), True)])
-              (RT.fromList [((4,7), False), ((5,10), False), ((3,6), True)])
+  sgCounter "counter-example-1"
+     (RT.fromList [((1,4), False)])
+     (RT.fromList [((3,6), False), ((-5,3), True), ((0,1), True)])
+     (RT.fromList [((4,7), False), ((5,10), False), ((3,6), True)])
 
   describe "counter-example-2" $ do
     let t = RT.fromList [((-62,-19),False)
@@ -534,20 +555,17 @@ oneDBoolCounterExamples = do
     it "does not change when adding to mempty" $ QC.within 1000 $ do
       (t <> mempty) `eq` t
 
-  describe "counter-example-3" $ do
-    sgCounter 
+  sgCounter "counter-example-3"
       (RT.fromList [((-1,1),True)])
       (RT.fromList [((-1,3),False)])
       (RT.fromList [((-1,0),False),((-1,0),False),((2,3),True)])
 
-  describe "counter-example-4" $ do
-    sgCounter 
+  sgCounter "counter-example-4"
       (RT.fromList [((5,8),False)])
       (RT.fromList [((4,5),True),((6,9),False)])
       (RT.fromList [((4,9),False),((5,8),True)])
 
-  describe "counter-example-5" $ do
-    sgCounter
+  sgCounter "counter-example-5"
       (RT.fromList [((-1, 9),True)])
       (RT.fromList [])
       (RT.fromList [((-5, 2),False)
@@ -557,12 +575,31 @@ oneDBoolCounterExamples = do
                    ,(( 9,13),False)
                    ])
 
-  describe "counter-example-6" $ do
-    sgCounter 
+  sgCounter "counter-example-6"
       (RT.fromList [((-3,-3),True),((-3,4),True)])
       (RT.fromList [])
       (RT.fromList [((-4,-2),True),((0,3),True),((1,5),True),((2,3),True)])
+  
+  sgCounter "counter-example-7"
+    (RT.fromList [((6,9),True)])
+    (RT.fromList [((-12,3),False)
+                 ,((-3,-1),True)
+                 ,((-1,1),False)
+                 ,((1,2),True)
+                 ,((1,5),False)
+                 ,((1,8),False)
+                 ,((4,4),False)
+                 ,((4,5),True)
+                 ,((4,11),True)
+                 ,((6,9),False)
+                 ,((9,17),True)
+                 ])
+    (RT.fromList [((10,18),True)])
 
+  sgCounter "counter-example-8"
+    (RT.fromList [((17,29),False),((20,21),False),((24,27),True)])
+    (RT.fromList [((19,25),False),((22,33),True),((24,27),False)])
+    (RT.fromList [((25,31),True)])
 
 dim3Sets = describe "Dim3Set"  $ do
   monoid (comparesEq :: Comparator Dim3Set)
