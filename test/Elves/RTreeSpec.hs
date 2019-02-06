@@ -493,74 +493,93 @@ stackOfCardsSpec = describe "stack-of-cards" $ do
     describe "mconcat" (tests $ mconcat [Leaf bs a | (bs,a) <- cards])
 
 lawsSpec = describe "Laws" $ do
-    describe "1D-Bool"  $ do
-      let oneDB = (cast :: Cast (RTree Int Bool))
-          eq = comparesEq :: Comparator (RTree Int Bool)
-      monoid eq
-      traversable oneDB
+  oneDBools
+  twoDChars
+  dim3Sets
+  fourDWords
 
-      let sgCounter a b c = do
-            let l_assoc = (a <> b) <> c
-                r_assoc = a <> (b <> c)
-                t_o = 1000
-            it "has same size" $ QC.within t_o (size l_assoc === size r_assoc)
-            it "comparesEq" $ QC.within t_o (l_assoc `eq` r_assoc)
+oneDBools = describe "1D-Bool"  $ do
+  let oneDB = (cast :: Cast (RTree Int Bool))
+      eq = comparesEq :: Comparator (RTree Int Bool)
+  monoid eq
+  traversable oneDB
+  oneDBoolCounterExamples
 
-      describe "counter-example" $ do
-        sgCounter (RT.fromList [((1,4), False)])
-                  (RT.fromList [((3,6), False), ((-5,3), True), ((0,1), True)])
-                  (RT.fromList [((4,7), False), ((5,10), False), ((3,6), True)])
+oneDBoolCounterExamples = do
+  let oneDB = (cast :: Cast (RTree Int Bool))
+      eq = comparesEq :: Comparator (RTree Int Bool)
+      t_o = 1000
+      sgCounter a b c = do
+        let l_assoc = (a <> b) <> c
+            r_assoc = a <> (b <> c)
+        it "has same size" $ QC.within t_o (size l_assoc === size r_assoc)
+        it "comparesEq"    $ QC.within t_o (l_assoc `eq` r_assoc)
 
-      describe "counter-example-2" $ do
-        let t = oneDB $ RT.fromList [((-62,-19),False),((39,47),False),((53,77),True),((61,68),True),((67,74),False)]
-        it "has the correct size" $ QC.within 10000 $ do
-          size t == 5
-        it "does not change when adding mempty" $ QC.within 10000 $ do
-          (mempty <> t) `eq` t
+  describe "counter-example-1" $ do
+    sgCounter (RT.fromList [((1,4), False)])
+              (RT.fromList [((3,6), False), ((-5,3), True), ((0,1), True)])
+              (RT.fromList [((4,7), False), ((5,10), False), ((3,6), True)])
 
-      describe "counter-example-3" $ do
-        sgCounter 
-          (RT.fromList [((-1,1),True)])
-          (RT.fromList [((-1,3),False)])
-          (RT.fromList [((-1,0),False),((-1,0),False),((2,3),True)])
+  describe "counter-example-2" $ do
+    let t = RT.fromList [((-62,-19),False)
+                        ,(( 39,47),False)
+                        ,(( 53,77),True)
+                        ,(( 61,68),True)
+                        ,(( 67,74),False)
+                        ]
+    it "has the correct size" $ QC.within 1000 $ do
+      size t == 5
+    it "does not change when adding mempty" $ QC.within 1000 $ do
+      (mempty <> t) `eq` t
+    it "does not change when adding to mempty" $ QC.within 1000 $ do
+      (t <> mempty) `eq` t
 
-      describe "counter-example-4" $ do
-        sgCounter 
-          (RT.fromList [((5,8),False)])
-          (RT.fromList [((4,5),True),((6,9),False)])
-          (RT.fromList [((4,9),False),((5,8),True)])
+  describe "counter-example-3" $ do
+    sgCounter 
+      (RT.fromList [((-1,1),True)])
+      (RT.fromList [((-1,3),False)])
+      (RT.fromList [((-1,0),False),((-1,0),False),((2,3),True)])
 
-      describe "counter-example-5" $ do
-        sgCounter
-          (RT.fromList [((-1, 9),True)
-                       ,(( 4, 5),False)
-                       ,(( 2, 8),True)
-                       ,(( 5,11),False)
-                       ,(( 7, 9),False)
-                       ,((11,14),True)
-                       ])
-          (RT.fromList [((4,11),True)])
-          (RT.fromList [((-7, 4),True)
-                       ,((-5, 2),False)
-                       ,((-3, 7),True)
-                       ,(( 0, 7),False)
-                       ,(( 5, 5),True)
-                       ,(( 4, 8),False)
-                       ,(( 6,13),False)
-                       ,(( 8,13),True)
-                       ,((10,10),False)
-                       ,(( 9,13),False)
-                       ])
+  describe "counter-example-4" $ do
+    sgCounter 
+      (RT.fromList [((5,8),False)])
+      (RT.fromList [((4,5),True),((6,9),False)])
+      (RT.fromList [((4,9),False),((5,8),True)])
 
-    describe "Dim3Set"  $ do
-      monoid (comparesEq :: Comparator Dim3Set)
-      traversable (cast :: Cast Dim3Set)
-    describe "2D Chars" $ do
-      monoid (comparesEq :: Comparator (RTree (Int,Int) Char))
-      traversable (cast :: Cast (RTree (Int,Int) Char))
-    describe "4D Word"  $ do
-      monoid (comparesEq :: Comparator (RTree (Int,Int,Int,Int) Word))
-      traversable (cast :: Cast (RTree (Int,Int,Int,Int) Word))
+  describe "counter-example-5" $ do
+    sgCounter
+      (RT.fromList [((-1, 9),True)
+                   ,((11,14),True)
+                   ])
+      (RT.fromList [])
+      (RT.fromList [((-7, 4),True)
+                   ,((-5, 2),False)
+                   ,((-3, 7),True)
+                   ,(( 0, 7),False)
+                   ,(( 5, 5),True)
+                   ,(( 8,13),True)
+                   ,((10,10),False)
+                   ,(( 9,13),False)
+                   ])
+
+  describe "counter-example-6" $ do
+    sgCounter 
+      (RT.fromList [((-3,-3),True),((-3,4),True)])
+      (RT.fromList [])
+      (RT.fromList [((-4,-2),True),((0,3),True),((1,5),True),((2,3),True)])
+
+
+dim3Sets = describe "Dim3Set"  $ do
+  monoid (comparesEq :: Comparator Dim3Set)
+  traversable (cast :: Cast Dim3Set)
+
+twoDChars = describe "2D Chars" $ do
+  monoid (comparesEq :: Comparator (RTree (Int,Int) Char))
+  traversable (cast :: Cast (RTree (Int,Int) Char))
+
+fourDWords = describe "4D Word"  $ do
+  monoid (comparesEq :: Comparator (RTree (Int,Int,Int,Int) Word))
+  traversable (cast :: Cast (RTree (Int,Int,Int,Int) Word))
 
 pair :: (Int,Int) -> (Int,Int)
 pair = id
