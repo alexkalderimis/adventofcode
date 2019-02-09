@@ -22,6 +22,28 @@ eq a b = let diff = showDiff a b
 cast :: Cast a
 cast = id
 
+equality :: (Arbitrary a, Eq a, Show a, Show b, Eq b)
+         => Cast a -> (a -> b) -> (a -> a) -> (a -> a) -> SpecWith ()
+equality cast f preserve purturb = describe "Eq" $ do
+  specify "symmetry" $ property $ \a b ->
+    (cast a == b) === (cast b == a)
+  specify "reflexivity" $ property $ \x ->
+    (cast x === x)
+  specify "negation" $ property $ \a b ->
+    (cast a /= b) === (not (b == a))
+  specify "transitivity-eq" $ property $ \a b ->
+    let c = preserve b
+     in (cast a == b) === (cast a == c)
+-- These tests are too hard to test correctly - it is just really
+-- unlikely that we can generate enough examples where the implication is met
+-- specify "transitivity-neq" $ property
+--   $ forAll (scale (`div` 2) arbitrary)
+--   $ \a -> forAll (scale (`div` 2) arbitrary) $ \b ->
+--     let c = purturb b
+--      in (cast a == b) ==> (cast a /= c)
+-- specify "substitutivity" $ property $ \a b ->
+--   (cast a == b) ==> (f a === f b)
+
 monoid :: (Arbitrary a, Monoid a, Show a) => Comparator a -> SpecWith ()
 monoid eq = describe "Monoid" $ parallel $ do
   let t_o = 100 * 10000

@@ -16,6 +16,7 @@ import qualified Data.Ix                  as Ix
 import qualified Data.List                as L
 import           Data.List.NonEmpty       (NonEmpty (..))
 import qualified Data.List.NonEmpty       as NE
+import           Data.Semigroup           (sconcat)
 import           Test.Hspec
 import           Test.QuickCheck          hiding (within)
 import qualified Test.QuickCheck          as QC
@@ -40,15 +41,6 @@ newtype Cube = Cube
 
 cubeSize :: Cube -> Int
 cubeSize (Cube bs) = Ix.rangeSize bs
-
-data Heuristic = Euclidean | Manhattan deriving (Show, Eq, Bounded, Enum)
-
-instance Arbitrary Heuristic where
-  arbitrary = arbitraryBoundedEnum
-
-measure :: Heuristic -> Dim3 -> Dim3 -> Double
-measure Euclidean = straightLine
-measure Manhattan = (realToFrac .) . manhattan
 
 instance Arbitrary Cube where
   arbitrary = do
@@ -146,6 +138,15 @@ spec = describe "Elves.RTree" $ parallel $ do
   insertWithSpec
   stackOfCardsSpec
   lawsSpec
+  decontructionSpec
+
+decontructionSpec = describe "deconstruct" $ do
+  describe "leaves" $ do
+    specify "mconcat (leaves t) === t" $ property $ \t ->
+      mconcat (leaves t) `eq` (t :: RTree Dim3 Word)
+  describe "subtrees" $ do
+    specify "sconcat (subtrees t) === t" $ property $ \t ->
+      sconcat (subtrees t) `eq` (t :: RTree Dim3 Word)
 
 sizeSpec = describe "size"
   $ it "always has the size of the elements you put in it"
@@ -259,9 +260,30 @@ nearestNeighbourSpec = describe "nearestNeighbour" $ do
          in maybe False ((f x y >=) . f x . fst . fst) mnn
 
 nearestNeighbourKSpec = describe "nearestNeighbourK" $ do
-    specify "it returns values in ascending order" $ property $ \h (NonNegative k) p t ->
-      let matches = mindist p . fst <$> nearestNeighbourK (measure h) k p (t :: Dim3Set)
-       in and [ a <= b | (a,b) <- zip matches (tail matches) ]
+  let distToP h p = measure h p . closestPoint p
+      comesBefore f a b = let fa = f a
+                              fb = f b
+                              q x = "(" ++ show x ++ ")"
+                           in QC.counterexample (unwords [ show a, q fa
+                                                         , ">"
+                                                         , show b, q fb
+                                                         ])
+                                            (fa <= fb)
+  specify "it returns values in ascending order"
+    $ property $ \h (NonNegative k) p t ->
+      let matches = fst <$> nearestNeighbourK (measure h) k p (t :: Dim3Set)
+       in foldr (.&&.) (property True) $ zipWith (comesBefore (distToP h p))
+                                                 matches (tail matches)
+
+  specify "counter-example-1" $ do
+    let h = Manhattan
+        k = 4
+        p = (-3,0,-2)
+        t = RT.fromList [(((-7,5,1),(0,12,14)), 'A')
+                        ,(((-5,-1,-7),(-5,-1,-7)),'B')
+                        ]
+        [a,b] = fst <$> nearestNeighbourK (measure h) k p t
+    comesBefore (distToP h p) a b
 
 insertSpec = describe "insert" $ do
 
@@ -397,7 +419,7 @@ insertSpec = describe "insert" $ do
       -- length (query Overlapping ((0,0,0),(0,0,0)) t') `shouldBe` 0
       size (insertPoint (0,0,0) 'θ' t) `shouldBe` 56
 
-    specify "makes-queries-work" $ property $ \t i -> QC.within 100000 $
+    specify "makes-queries-work" $ property $ \t i ->
       query1 i (insertPoint i () t) == [(i :: Dim3,())]
 
     describe "sub-regions" $ do
@@ -477,7 +499,7 @@ stackOfCardsSpec = describe "stack-of-cards" $ do
     let mkCard x y a = ( ((x,y),(x + (20 :: Int), y + (100 :: Int))), a )
         cards = zipWith (\p chr -> mkCard p p chr) [1 .. 20] ['a' ..]
         tests t = do
-          let limit = 100 * 2000 -- 2ms per test, generous timeout
+          let limit = 100 * 4000
           it "can used to build a tree" $ QC.within 1000 $ do
             size t `shouldBe` length cards
           it "can select a known card"
@@ -520,6 +542,12 @@ oneDBools = describe "1D-Bool"  $ do
   let oneDB = (cast :: Cast (RTree Int Bool))
   monoid (eq :: Comparator (RTree Int Bool))
   traversable oneDB
+  equality oneDB (lookup (10, 17))
+           (mconcat . reverse . leaves)
+           (\t -> if null t
+                     then insert (10,17) True t
+                     else mconcat . drop 1 $ leaves t)
+    
   oneDBoolCounterExamples
 
 oneDBoolCounterExamples = do
@@ -584,7 +612,7 @@ oneDBoolCounterExamples = do
       (RT.fromList [((-3,-3),True),((-3,4),True)])
       (RT.fromList [])
       (RT.fromList [((-4,-2),True),((0,3),True),((1,5),True),((2,3),True)])
-  
+
   sgCounter "counter-example-7"
     (RT.fromList [((6,9),True)])
     (RT.fromList [((-12,3),False)
@@ -650,6 +678,11 @@ oneDBoolCounterExamples = do
 dim3Sets = describe "Dim3Set"  $ do
   monoid (eq :: Comparator Dim3Set)
   traversable (cast :: Cast Dim3Set)
+  equality (cast :: Cast Dim3Set) (lookup ((0,0,0), (0,0,0)))
+           (mconcat . reverse . leaves)
+           (\t -> if null t
+                     then insert ((0,0,0), (0,0,0)) () t
+                     else mconcat . drop 1 $ leaves t)
 
 twoDChars = describe "2D Chars" $ do
   monoid (eq :: Comparator (RTree (Int,Int) Char))

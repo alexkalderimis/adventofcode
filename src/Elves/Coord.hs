@@ -3,12 +3,23 @@
 
 module Elves.Coord where
 
+import           Test.QuickCheck          hiding (within)
+
 import Data.Ix (Ix)
 import qualified Data.Ix as Ix
 import qualified Data.List as L
 import           Control.Lens              hiding (contains, index)
 
 type Accessor a b = ReifiedLens a a b b
+
+data Heuristic = Euclidean | Manhattan deriving (Show, Eq, Bounded, Enum)
+
+instance Arbitrary Heuristic where
+  arbitrary = arbitraryBoundedEnum
+
+measure :: Coord a => Heuristic -> a -> a -> Double
+measure Euclidean = straightLine
+measure Manhattan = (realToFrac .) . manhattan
 
 class Ord a => Coord a where
   dimensions :: [Accessor a Int]

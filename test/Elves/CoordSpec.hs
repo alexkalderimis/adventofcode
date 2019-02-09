@@ -1,13 +1,13 @@
 module Elves.CoordSpec (spec) where
 
-import qualified Data.Ix as Ix
-import qualified Data.List as L
-import           Control.Lens              hiding (contains, index)
+import           Control.Lens    hiding (contains, elements, index)
+import qualified Data.Ix         as Ix
+import qualified Data.List       as L
 
-import Test.Hspec
-import Test.QuickCheck hiding (scale, NonZero, within)
+import           Test.Hspec
+import           Test.QuickCheck hiding (NonZero, scale, within)
 
-import Elves.Coord
+import           Elves.Coord
 
 type Point2 = (Int,Int)
 type Point  = (Int,Int,Int)
@@ -20,6 +20,15 @@ instance (Arbitrary a, Coord a) => Arbitrary (NonZero a) where
   arbitrary = NonZero <$> (arbitrary `suchThat` (not . isZero))
 
 newtype Cube a = Cube (a,a) deriving Show
+
+data CubeWithPoint a = CWP (Cube a) a deriving Show
+
+instance (Coord a, Ix.Ix a, Arbitrary a) => Arbitrary (CubeWithPoint a) where
+  arbitrary = do
+    (Cube (lb,ub)) <- arbitrary
+    components <- sequence [choose (lb ^. d, ub ^. d) | Lens d <- dimensions]
+    let p = L.foldl' (\a (Lens d, v) -> set d v a) lb (zip dimensions components)
+    return (CWP (Cube (lb,ub)) p)
 
 instance (Coord a, Arbitrary a) => Arbitrary (Cube a) where
   arbitrary = do
@@ -124,6 +133,20 @@ spec = describe "Elves.Coord" $ do
       manhattan (-2,3) ((7,10) :: Point2) `shouldBe` 16
     it "is the sum of the straightline distances" $ property $ \a b ->
       manhattan a (b :: Point) == sum (mindists (a,a) (b,b))
+
+  describe "closestPoint" $ do
+    specify "The closest point is closer by any measure, in 2D" $
+      withMaxSuccess 10000 $ \h p (CWP (Cube bs) p') ->
+        let cp = closestPoint p (bs :: B Point2)
+         in measure h p cp <= measure h p p'
+    specify "The closest point is closer by any measure, in 3D" $
+      withMaxSuccess 1000 $ \h p (CWP (Cube bs) p') ->
+        let cp = closestPoint p (bs :: B Point)
+         in measure h p cp <= measure h p p'
+    specify "The closest point is closer by any measure, in 4D" $
+      withMaxSuccess 1000 $ \h p (CWP (Cube bs) p') ->
+        let cp = closestPoint p (bs :: B Point4)
+         in measure h p cp <= measure h p p'
 
   describe "mindist" $ do
     specify "mindist (0,0,7) ((-1,-4,-12),(-1,4,-12)) == 19.02.." $ do

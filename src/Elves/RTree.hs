@@ -112,14 +112,16 @@ eqtup f a b = (fst a `f` fst b) && (snd a `f` snd b)
 instance Eq i => Eq1 (RTree i) where
     liftEq = liftEq2 (==)
 
-instance (Ord i, Ord a) => Ord (RTree i a) where
+instance (Coord i, Ord i, Ord a) => Ord (RTree i a) where
   compare t1 t2 = let sorted = L.sortBy (comparing fst) . assocs
                    in compare (sorted t1) (sorted t2)
 
 -- to avoid exposing internal structure, the EQ instance
 -- requires Ord instances of its components
-instance (Ord i, Ord a) => Eq (RTree i a) where
-  a == b = compare a b == EQ
+instance (Coord i, Eq i, Eq a) => Eq (RTree i a) where
+  a == b = case bounds a <|> bounds b of
+             Nothing -> True
+             Just (lb,_) -> priorityOrder straightLine lb a == priorityOrder straightLine lb b
 
 bounds :: RTree i a -> Maybe (Bounds i)
 bounds (Leaf b _)   = Just b
@@ -148,46 +150,6 @@ fromList = fromListWith pure
 
 fromListWith :: (Coord i, Ix i) => (a -> a -> a) -> [(Bounds i, a)] -> RTree i a
 fromListWith f = L.foldl' (\t (bs, a) -> unionWith (flip f) (Leaf bs a) t) Tip
-{-
-fromListWith f = go 0
-  where
-    boundify (i:is) = L.foldl' (flip expandB) i is
-    ds = dimensions
-    dlen = length ds
-    go _ [] = Tip
-    go dim xs
-      | n <= maxPageSize = let bs = boundify (fst <$> xs)
-                               ts = fmap (uncurry Leaf)
-                                    . uncollide
-                                    $ L.sortBy order xs
-                            in region bs ts
-      | otherwise = let chunk = max maxPageSize (n `div` maxPageSize)
-                        ts = fmap (go (dim + 1))
-                             . (>>= chunksOf chunk)
-                             . L.groupBy (overlaps `on` fst)
-                             . uncollide
-                             $ L.sortBy order xs
-                        bs = L.foldl1 expandB (catMaybes (bounds <$> ts))
-                     in region bs ts
-        where n = length xs
-              order = comparing (midpoints.fst)
-              midPoint a b = (a + b) `div` 2
-              midpoints = let ixs  = fmap ((+ dim) . fst) $ zip [0 ..] ds
-                              mp bs i = let p = view $ runLens (ds !! (i `mod` dlen))
-                                            a = p (fst bs)
-                                            b = p (snd bs)
-                                         in (midPoint a b, a, b)
-                           in \bs -> fmap (mp bs) ixs
-              region bs ts = maybe Tip (compact . Region bs . sortKids) (NE.nonEmpty ts)
-              uncollide (a:b:xs) = if fst a == fst b
-                                      then uncollide ((fst a, f (snd a) (snd b)) : xs)
-                                      else a : uncollide (b:xs)
-              uncollide xs = xs
--}
-
-chunksOf :: Int -> [a] -> [[a]]
-chunksOf _ [] = []
-chunksOf n xs = let (as,bs) = L.splitAt n xs in as : chunksOf n bs
 
 insert :: (Ix i, Coord i) => Bounds i -> a -> RTree i a -> RTree i a
 insert = insertWith pure
@@ -218,6 +180,7 @@ empty = Tip
 union :: (Ix i, Coord i) => RTree i a -> RTree i a -> RTree i a
 union = unionWith pure
 
+-- The meat of the matter - adding two trees together.
 unionWith :: (Ix i, Coord i) => (a -> a -> a) -> RTree i a -> RTree i a -> RTree i a
 -- the trivial cases: tips are identities of union
 unionWith f Tip right = right
@@ -247,10 +210,17 @@ compact :: RTree i a -> RTree i a
 compact (Region _ (t :| [])) = t
 compact t                    = t
 
+-- Remove (at-most) one layer of structure, returning the immediately
+-- accessible subtrees
+--
+-- Satisfies: sconcat (subtrees t) === t
 subtrees :: RTree i a -> NonEmpty (RTree i a)
 subtrees (Region _ ts) = ts
 subtrees t             = pure t
 
+-- Decompose a tree into a list of leaves
+--
+-- Satisfies: mconcat (subtrees t) === t
 leaves :: RTree i a -> [RTree i a]
 leaves t = case t of
   Region _ ts -> NE.toList ts >>= leaves
@@ -272,7 +242,8 @@ insertChild f bs a ts = case (length ts < maxPageSize, none isRegion ts) of
     -- any collisions will always be selected first, followed by overlaps.
     fallback isSmall
       | isSmall && none (overlapping t) ts = NE.cons t ts
-      | otherwise = let (best :| rest) = selectChild t ts in unionWith f t best :| rest
+      | otherwise = let (best :| rest) = selectChild t ts
+                     in unionWith f t best :| rest
     -- given a set of good choices, insert the child into their union
     insertInto (best,rest) = unionWith f t (mconcat best) :| rest
     -- the child
@@ -322,24 +293,34 @@ nearestNeighbour :: (Coord i, Eq i, Real b) => (i -> i -> b) -> i -> RTree i a -
 nearestNeighbour dist p = listToMaybe . nearestNeighbourK dist 1 p
 
 -- retrieve k nearest neighbours
-nearestNeighbourK :: (Coord i, Eq i, Real b)
+nearestNeighbourK :: (Coord i, Real b)
                   => (i -> i -> b) -> Int -> i -> RTree i a -> [(Bounds i,a)]
-nearestNeighbourK dist n pnt
-  = go (max 0 n) . (enqueue =<< priorityQueue)
-  where
-    d (i,j) | i == j    = realToFrac $ dist pnt i
-            | otherwise = mindist pnt (i,j)
-    enqueue q t = case t of
-      Tip        -> q
-      Leaf i _   | (pnt,pnt) == i -> q
-      Leaf i _   -> Heap.insert (Entry (d i) t) q
-      Region b _ -> Heap.insert (Entry (d b) t) q
+nearestNeighbourK dist n pnt = take n . nearestNeighbours dist pnt
 
-    go 0      _ = []
-    go needed q = maybeToList (Heap.uncons q) >>= \(e,q') -> case Heap.payload e of
-            Tip         -> go needed q' -- impossible, but harmless
-            Leaf i a    -> (i,a) : go (needed - 1) q'
-            Region _ ts -> go needed (L.foldl' enqueue q' ts)
+-- returns tree sorted into priority order
+-- does not include any objects located precisely at the given point
+nearestNeighbours :: (Coord i, Real b)
+                  => (i -> i -> b) -> i -> RTree i a -> [(Bounds i,a)]
+nearestNeighbours dist pnt = filter ((/= (pnt,pnt)) . fst)
+                           . priorityOrder dist pnt
+
+-- returns tree sorted into priority order.
+-- Returns all objects in the tree
+priorityOrder :: (Coord i, Real b)
+              => (i -> i -> b) -> i -> RTree i a -> [(Bounds i,a)]
+priorityOrder dist pnt = L.unfoldr go . (enqueue =<< priorityQueue)
+  where
+    d = realToFrac . dist pnt . closestPoint pnt
+    enqueue q t = case fmap d (bounds t) of
+      Just d' -> Heap.insert (Entry d' t) q
+      _       -> q
+
+    go q = do
+      (e,q') <- Heap.uncons q
+      case Heap.payload e of
+        Tip         -> go q' -- impossible, but harmless
+        Leaf i a    -> pure ((i,a),q')
+        Region _ ts -> go (L.foldl' enqueue q' ts)
 
 priorityQueue :: RTree i a -> Heap (Entry Double (RTree i a))
 priorityQueue _ = Heap.empty
@@ -398,15 +379,15 @@ drawTree = Tree.drawForest . structure
 
 instance (Eq i, Ix i, Coord i, Show a, Show i, Eq a) => ShowDiff (RTree i a) where
   showDiff a b = case diffTree a b of
-                   [] -> Nothing
+                   []    -> Nothing
                    diffs -> Just (show diffs)
 
 diffTree :: (Eq i, Ix i, Coord i, Eq a) => RTree i a -> RTree i a -> [(Bounds i, Where a a)]
 diffTree a b = do
   q <- concat . fmap (take 1) . L.group $ L.sort (locations a <> locations b)
   case (lookup q a, lookup q b) of
-    (Nothing, Just x) -> pure (q, InRight x)
-    (Just x, Nothing) -> pure (q, InLeft x)
+    (Nothing, Just x)  -> pure (q, InRight x)
+    (Just x, Nothing)  -> pure (q, InLeft x)
     (Nothing, Nothing) -> pure (q, Neither) -- impossible
-    (Just x, Just y) -> if x == y then [] else pure (q, Diff x y)
+    (Just x, Just y)   -> if x == y then [] else pure (q, Diff x y)
 
