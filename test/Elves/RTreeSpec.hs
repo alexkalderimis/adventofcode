@@ -19,7 +19,6 @@ import qualified Data.List.NonEmpty       as NE
 import           Test.Hspec
 import           Test.QuickCheck          hiding (within)
 import qualified Test.QuickCheck          as QC
-import qualified Test.QuickCheck.Monadic  as QCM
 
 import           Elves
 import           Elves.Coord
@@ -167,7 +166,7 @@ querySpec = describe "query" $ do
       let t = index' (e : elems)
        in query1 (fst e) t === [e]
     describe "any strategy" $ do
-      it "no-false-negatives" $ property $ \strategy e elems -> QC.within 10000 $
+      it "no-false-negatives" $ property $ \strategy e elems ->
         let t = RT.fromList [(getCube x, ()) | x <- e : elems ]
          in (getCube e, ()) `elem` query strategy (getCube e) t
 
@@ -213,8 +212,8 @@ querySpec = describe "query" $ do
 
 lookupSpec = describe "lookup" $ do
   let oneDB = (cast :: Cast (RTree Int Bool))
-  specify "We can find anything present in the tree"
-   $ property $ \(Cube bs) x t ->
+
+  specify "We can find anything present in the tree" $ property $ \(Cube bs) x t ->
     lookup bs (Leaf bs x <> t) === Just (x :: Word)
 
   specify "We cannot find anything not present in the tree"
@@ -222,8 +221,8 @@ lookupSpec = describe "lookup" $ do
     let t = RT.fromList (filter ((/= bs) . fst) xs)
      in lookup bs t === (Nothing :: Maybe Word)
 
-  specify "lookup q t === L.lookup q (assocs t)"
-    $ property $ \(ValidBounds q) t -> lookup q (oneDB t) === L.lookup q (assocs t)
+  specify "lookup q t === L.lookup q (assocs t)" $ property $ \(ValidBounds q) t ->
+    lookup q (oneDB t) === L.lookup q (assocs t)
 
   specify "lookup q (a <> b) == if q `member` a then lookup q a else lookup q b"
     $ property $ \(ValidBounds q) a b ->
@@ -427,11 +426,18 @@ nullSpec = describe "null" $ do
       RT.null (tree ps) == null ps
 
 deleteSpec = describe "delete" $ do
-    it "reduces tree size" $ property $ \p ps ->
-      let t = tree (p:ps)
-       in size t > size (delete (dbl p) t)
-    it "makes points impossible to find" $ property $ \p ps ->
-      null (query1 p . delete (dbl p) $ tree (p:ps))
+
+  it "reduces tree size" $ property $ \p ps ->
+    let t = tree (p:ps)
+     in size t > size (delete (dbl p) t)
+
+  it "makes points impossible to find" $ property $ \p ps ->
+    null (query1 p . delete (dbl p) $ tree (p:ps))
+
+  it "ensures that member returns False" $ property $ \p ps ->
+    let t = tree (p:ps)
+        q = dbl p
+     in member q (delete q t) === False
 
 sizeWithSpec = describe "sizeWith" $ do
     specify "is always extent t when adding a Tip" $ property $ \t ->
@@ -512,29 +518,28 @@ lawsSpec = describe "Laws" $ do
 
 oneDBools = describe "1D-Bool"  $ do
   let oneDB = (cast :: Cast (RTree Int Bool))
-      eq = comparesEq :: Comparator (RTree Int Bool)
-  monoid eq
+  monoid (eq :: Comparator (RTree Int Bool))
   traversable oneDB
   oneDBoolCounterExamples
 
 oneDBoolCounterExamples = do
   let oneDB = (cast :: Cast (RTree Int Bool))
-      eq = comparesEq :: Comparator (RTree Int Bool)
-      t_o = 1000
+      is = eq :: Comparator (RTree Int Bool)
+      t_o = 10000
       sgCounter name a b c = describe name $ do
         let l_assoc = (a <> b) <> c
             r_assoc = a <> (b <> c)
-        runIO $ do
-          putStrLn name
-          putStrLn "A:"
-          putStrLn (drawTree a)
-          putStrLn "B:"
-          putStrLn (drawTree b)
-          putStrLn "C:"
-          putStrLn (drawTree c)
+        -- runIO $ do
+        --   putStrLn name
+        --   putStrLn "A:"
+        --   putStrLn (drawTree a)
+        --   putStrLn "B:"
+        --   putStrLn (drawTree b)
+        --   putStrLn "C:"
+        --   putStrLn (drawTree c)
 
         it "has same size" $ QC.within t_o (size l_assoc === size r_assoc)
-        it "comparesEq"    $ QC.within t_o (l_assoc `eq` r_assoc)
+        it "comparesEq"    $ QC.within t_o (l_assoc `is` r_assoc)
 
   sgCounter "counter-example-1"
      (RT.fromList [((1,4), False)])
@@ -551,9 +556,9 @@ oneDBoolCounterExamples = do
     it "has the correct size" $ QC.within 1000 $ do
       size t == 5
     it "does not change when adding mempty" $ QC.within 1000 $ do
-      (mempty <> t) `eq` t
+      (mempty <> t) `is` t
     it "does not change when adding to mempty" $ QC.within 1000 $ do
-      (t <> mempty) `eq` t
+      (t <> mempty) `is` t
 
   sgCounter "counter-example-3"
       (RT.fromList [((-1,1),True)])
@@ -597,20 +602,61 @@ oneDBoolCounterExamples = do
     (RT.fromList [((10,18),True)])
 
   sgCounter "counter-example-8"
-    (RT.fromList [((17,29),False),((20,21),False),((24,27),True)])
-    (RT.fromList [((19,25),False),((22,33),True),((24,27),False)])
+    (RT.fromList [ ((17,29),False), ((20,21),False), ((24,27),True) ])
+    (RT.fromList [ ((19,25),False), ((22,33),True),  ((24,27),False) ])
     (RT.fromList [((25,31),True)])
 
+  sgCounter "counter-example-9"
+    (RT.fromList [ ((-11,2),False)])
+    (RT.fromList [ ((8,8),False)])
+    (RT.fromList [ ((1,8),True)
+                 , ((1,11),False)
+                 , ((8,8),False)
+                 , ((8,9),True)
+                 , ((5,15),False)
+                 ])
+
+  -- spurious counter-example. Reported as failure from quick-check but
+  -- actually OK
+  sgCounter "counter-example-10"
+    (RT.fromList [((2,79),False),((10,30),False)])
+    (RT.fromList [((7,77),False),((26,63),True)])
+    (RT.fromList [ ((-77,17),False)
+                 , ((-75,42),False) , ((-75,51),True) , ((-74,73),False)
+                 , ((-55,62),True) , ((-50,77),False) , ((-43,71),True)
+                 , ((-33,58),True) , ((-25,45),True) , ((-21,68),False)
+                 , ((-17,51),True) , ((-71,41),True) , ((-70,32),True)
+                 , ((-74,23),False) , ((-69,28),True) , ((-68,22),False)
+                 , ((-74,17),False) , ((-60,-35),True) , ((-53,-1),False)
+                 , ((-52,-17),False) , ((-41,22),False) , ((-36,-5),False)
+                 , ((-40,-17),True) , ((-39,-16),True) , ((-28,-1),True)
+                 , ((-32,-8),True) , ((-32,-2),False) , ((-31,-17),True)
+                 , ((-22,-3),False) , ((-74,-40),True) , ((-62,-52),False)
+                 , ((-56,-50),True),((-5,65),True),((-4,68),True),((-1,9),True)
+                 , ((-1,6),False)
+                 , ((3,70),False),((0,30),True),((2,8),True),((2,55),False)
+                 , ((3,32),False),((6,32),False),((8,36),True),((10,30),True)
+                 , ((9,27),False),((11,50),False),((14,21),False),((3,58),True)
+                 , ((23,43),True),((23,71),False),((24,75),False),((29,50),True)
+                 , ((28,74),True),((34,77),True),((47,85),True),((58,77),False)
+                 , ((43,74),False),((52,74),False),((37,73),True),((42,73),True)
+                 , ((31,35),True),((38,64),False),((34,62),True),((49,69),False)
+                 , ((51,63),False),((59,60),False),((36,39),False),((36,60),False)
+                 , ((39,47),True),((42,60),True),((59,78),False),((59,86),False)
+                 , ((62,79),False),((67,82),True),((71,75),False),((72,89),False)
+                 , ((74,77),False),((73,73),False)
+                 ])
+
 dim3Sets = describe "Dim3Set"  $ do
-  monoid (comparesEq :: Comparator Dim3Set)
+  monoid (eq :: Comparator Dim3Set)
   traversable (cast :: Cast Dim3Set)
 
 twoDChars = describe "2D Chars" $ do
-  monoid (comparesEq :: Comparator (RTree (Int,Int) Char))
+  monoid (eq :: Comparator (RTree (Int,Int) Char))
   traversable (cast :: Cast (RTree (Int,Int) Char))
 
 fourDWords = describe "4D Word"  $ do
-  monoid (comparesEq :: Comparator (RTree (Int,Int,Int,Int) Word))
+  monoid (eq :: Comparator (RTree (Int,Int,Int,Int) Word))
   traversable (cast :: Cast (RTree (Int,Int,Int,Int) Word))
 
 pair :: (Int,Int) -> (Int,Int)

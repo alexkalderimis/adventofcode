@@ -47,8 +47,8 @@ points :: Coord c => c -> [Int]
 points c = [ c ^. d | Lens d <- dimensions ]
 
 -- is a entirely within b?
-within :: (Ix i, Coord i) => (i,i) -> (i,i) -> Bool
-within a b = all (Ix.inRange b) (corners a)
+within :: (Ix i) => (i,i) -> (i,i) -> Bool
+within a b = all (Ix.inRange b) [fst a, snd a]
 
 corners :: (Coord i) => (i,i) -> [i]
 corners (lb,ub) = L.foldl' f [lb] dimensions

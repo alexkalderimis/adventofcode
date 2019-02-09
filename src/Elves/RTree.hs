@@ -35,6 +35,7 @@ import           Test.QuickCheck.Arbitrary (Arbitrary (arbitrary, shrink),
 import           Test.QuickCheck.Gen       (suchThat)
 
 import           Elves.Coord
+import           Elves.Core
 
 type Bounds i = (i,i)
 
@@ -130,6 +131,9 @@ indexed Tip            = Tip
 indexed (Leaf i a)     = Leaf i (i,a)
 indexed (Region bs ts) = Region bs (indexed <$> ts)
 
+locations :: RTree i a -> [Bounds i]
+locations = F.toList . fmap fst . indexed
+
 assocs :: RTree i a -> [((i,i),a)]
 assocs = F.toList . indexed
 
@@ -142,7 +146,9 @@ size = sum . fmap (pure 1)
 fromList :: (Ix i, Coord i) => [(Bounds i, a)] -> RTree i a
 fromList = fromListWith pure
 
-fromListWith :: (Coord i) => (a -> a -> a) -> [(Bounds i, a)] -> RTree i a
+fromListWith :: (Coord i, Ix i) => (a -> a -> a) -> [(Bounds i, a)] -> RTree i a
+fromListWith f = L.foldl' (\t (bs, a) -> unionWith (flip f) (Leaf bs a) t) Tip
+{-
 fromListWith f = go 0
   where
     boundify (i:is) = L.foldl' (flip expandB) i is
@@ -177,6 +183,7 @@ fromListWith f = go 0
                                       then uncollide ((fst a, f (snd a) (snd b)) : xs)
                                       else a : uncollide (b:xs)
               uncollide xs = xs
+-}
 
 chunksOf :: Int -> [a] -> [[a]]
 chunksOf _ [] = []
@@ -255,31 +262,34 @@ insertChild :: (Ix i, Coord i)
             -> NonEmpty (RTree i a) -> NonEmpty (RTree i a)
 insertChild f bs a ts = case (length ts < maxPageSize, none isRegion ts) of
   (True, True)   -> insertInto $ NE.partition colliding ts
-  _              -> maybe fallback insertInto $ dividing [(`contains` t)
-                                                         ,overlappingReg
-                                                         ,(overlapping t)
-                                                         ]
+  (isSmall, _)   -> maybe (fallback isSmall) insertInto
+                    $ foldr (<|>) Nothing [ divide (member bs)
+                                          , divide (`contains` t)
+                                          , divide (overlapping t)
+                                          ]
   where
     -- insert child into best position in the current list. This ensures that
     -- any collisions will always be selected first, followed by overlaps.
-    fallback = let (best :| rest) = selectChild in unionWith f t best :| rest
+    fallback isSmall
+      | isSmall && none (overlapping t) ts = NE.cons t ts
+      | otherwise = let (best :| rest) = selectChild t ts in unionWith f t best :| rest
     -- given a set of good choices, insert the child into their union
     insertInto (best,rest) = unionWith f t (mconcat best) :| rest
     -- the child
     t = Leaf bs a
 
-    dividing fs = L.foldl1 (<|>) (divide <$> fs)
+    divide f = neitherNull $ NE.partition f ts
 
     colliding = maybe False (== bs) . bounds
     overlappingReg = liftA2 (&&) (overlapping t) isRegion
-    divide f = neitherNull $ NE.partition f ts
     -- choose the child that needs the smallest expansion to contain the child,
     -- in a tie, choose the child that is closest in extent to the child itself.
     -- This is designed to make sure we prefer collisions to containment
-    selectChild = NE.sortBy (comparing (\x -> (expansion t x, expansion x t))) ts
     neitherNull (xs,ys) = if L.null xs || L.null ys
                              then Nothing
                              else Just (xs,ys)
+
+selectChild t ts = NE.sortBy (comparing (\x -> (expansion t x, expansion x t))) ts
 
 isRegion :: RTree i a -> Bool
 isRegion Region{} = True
@@ -304,6 +314,9 @@ query strat q t
 
 lookup :: (Ix i, Coord i) => (i,i) -> RTree i a -> Maybe a
 lookup q = fmap snd . listToMaybe . query Precisely q
+
+member :: (Ix i, Coord i) => Bounds i -> RTree i a -> Bool
+member q = isJust . lookup q
 
 nearestNeighbour :: (Coord i, Eq i, Real b) => (i -> i -> b) -> i -> RTree i a -> Maybe (Bounds i,a)
 nearestNeighbour dist p = listToMaybe . nearestNeighbourK dist 1 p
@@ -382,3 +395,18 @@ structure t = case t of
 
 drawTree :: (Show i, Show a) => RTree i a -> String
 drawTree = Tree.drawForest . structure
+
+instance (Eq i, Ix i, Coord i, Show a, Show i, Eq a) => ShowDiff (RTree i a) where
+  showDiff a b = case diffTree a b of
+                   [] -> Nothing
+                   diffs -> Just (show diffs)
+
+diffTree :: (Eq i, Ix i, Coord i, Eq a) => RTree i a -> RTree i a -> [(Bounds i, Where a a)]
+diffTree a b = do
+  q <- concat . fmap (take 1) . L.group $ L.sort (locations a <> locations b)
+  case (lookup q a, lookup q b) of
+    (Nothing, Just x) -> pure (q, InRight x)
+    (Just x, Nothing) -> pure (q, InLeft x)
+    (Nothing, Nothing) -> pure (q, Neither) -- impossible
+    (Just x, Just y) -> if x == y then [] else pure (q, Diff x y)
+
