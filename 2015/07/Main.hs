@@ -5,6 +5,7 @@ import qualified Data.Attoparsec.Text    as A
 import           Data.Bits
 import           Data.Char               (isLetter)
 import qualified Data.HashMap.Strict     as M
+import qualified Data.HashSet            as S
 import           Data.Text               (Text)
 import qualified Data.Text               as T
 import           Data.Word
@@ -17,14 +18,14 @@ import           Elves.Advent
 
 main = day 7 parser pt1 pt2 test
   where
-    getA = fmap snd . getValue (Left "a")
+    getA = getValue (Left "a")
     set k v = M.insert k (Input (Right v))
     pt1 c = print (getA c)
     pt2 c = do let mv = do x <- getA c
                            getA (set "b" x c)
                case mv of
-                  Nothing -> die "circuit error"
-                  Just v  -> print v
+                  Left err -> die err
+                  Right v  -> print v
 
 test = do
   describe "pt1" $ do
@@ -40,7 +41,7 @@ test = do
                     ]
     forM_ solutions $ \(k,v) -> do
       it ("can solve for " <> T.unpack k) $ do
-        fmap (fmap snd . getValue (Left k)) mi `shouldBe` Right (Just v)
+        (mi >>= getValue (Left k)) `shouldBe` Right v
 
 type Current = Word16
 type Wire = Text
@@ -57,26 +58,30 @@ data Recipe a = Input (Value a)
 
 type Circuit = M.HashMap Wire (Recipe Current)
 
-getValue :: Value Current -> Circuit -> Maybe (Circuit, Current)
-getValue (Right v) m = pure (m, v)
-getValue (Left k) m = do
-  r <- M.lookup k m
-  (m', v) <- evalRecipe m r
-  pure (M.insert k (Input (Right v)) m', v)
+getValue :: Value Current -> Circuit -> Either String Current
+getValue v c = fmap (\(_,_,v) -> v) $ go S.empty v c
+  where 
+   go s (Right v) m = pure (s, m, v)
+   go s (Left k) m = do
+    s' <- if S.member k s
+             then Left ("cycle detected: " <> T.unpack k)
+             else pure (S.insert k s)
+    r <- maybe (Left $ "Reference error - could not find " ++ T.unpack k) Right (M.lookup k m)
+    (s'', m', v) <- evalRecipe s' m r
+    pure (S.delete k s'', M.insert k (Input (Right v)) m', v)
 
-evalRecipe :: Circuit -> Recipe Current -> Maybe (Circuit, Current)
-evalRecipe m r = case r of
-  Input val  -> getValue val m
-  Not val    -> op complement val
-  And a b    -> binop (.&.) a b
-  Or a b     -> binop (.|.) a b
-  LShift a b -> op (`shiftL` b) a
-  RShift a b -> op (`shiftR` b) a
-  where
-    op f val = fmap (fmap f) (getValue val m)
-    binop f a b = do (m', av) <- getValue a m
-                     (m'', bv) <- getValue b m'
-                     pure (m'', f av bv)
+   evalRecipe s m r = case r of
+    Input val  -> go s val m
+    Not val    -> op complement val
+    And a b    -> binop (.&.) a b
+    Or a b     -> binop (.|.) a b
+    LShift a b -> op (`shiftL` b) a
+    RShift a b -> op (`shiftR` b) a
+    where
+      op f val = fmap (\(s,m,v) -> (s,m,f v)) (go s val m)
+      binop f a b = do (s', m', av) <- go s a m
+                       (s'', m'', bv) <- go s' b m'
+                       pure (s'', m'', f av bv)
 
 parser :: Parser Circuit
 parser = fmap M.fromList (wireDef `sepBy1` newline)
