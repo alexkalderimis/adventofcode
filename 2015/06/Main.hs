@@ -30,7 +30,7 @@ data Lit = On | Off deriving (Show, Eq)
 data Command = Turn Lit | Toggle
   deriving (Show, Eq)
 
-type Commands = RTree Location (Word, Command)
+type Commands = RTree Location [(Word, Command)]
 
 data NeighbourInput = NeighbourInput (Bounds Location) (Bounds Location)
   deriving (Show, Eq)
@@ -59,9 +59,9 @@ main = day 6 parser pt1 pt2 test
 -- toggle 322,558 through 977,958
 -- turn on 226,196 through 599,390
 parser :: Parser Commands
-parser = fmap (RT.fromList . zipWith f [0 ..]) (commandP `sepBy1` newline)
+parser = fmap (RT.fromListWith (<>) . zipWith f [0 ..]) (commandP `sepBy1` newline)
   where
-    f prio (bs, cmd) = (bs, (prio, cmd))
+    f prio (bs, cmd) = (bs, pure (prio, cmd))
     location = (decimal <* ",") <#> decimal
     commandP = do
       cmd <- choice [Turn On <$ "turn on"
@@ -149,6 +149,7 @@ popCommand order cs bs
            = fmap (f . fmap snd)
            . listToMaybe
            . L.sortBy (comparing (order . insertedAt . queryResult))
+           . (>>= \(k, vs) -> (,) k <$> vs)
            $ query Overlapping bs cs
   where
     f (bs', cmd) = ((trim bs bs', cmd), delete bs' cs)
