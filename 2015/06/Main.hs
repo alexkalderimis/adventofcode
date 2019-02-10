@@ -5,6 +5,8 @@ import qualified Data.Array              as A
 import           Data.Attoparsec.Text    (decimal, space)
 import           Data.Ix
 import qualified Data.List               as L
+import qualified Data.List.NonEmpty               as NE
+import Data.List.NonEmpty (NonEmpty)
 import           Data.Maybe
 import           Data.Monoid
 import           Data.Ord
@@ -30,7 +32,7 @@ data Lit = On | Off deriving (Show, Eq)
 data Command = Turn Lit | Toggle
   deriving (Show, Eq)
 
-type Commands = RTree Location [(Word, Command)]
+type Commands = RTree Location (NonEmpty (Word, Command))
 
 data NeighbourInput = NeighbourInput (Bounds Location) (Bounds Location)
   deriving (Show, Eq)
@@ -59,9 +61,8 @@ main = day 6 parser pt1 pt2 test
 -- toggle 322,558 through 977,958
 -- turn on 226,196 through 599,390
 parser :: Parser Commands
-parser = fmap (RT.fromListWith (<>) . zipWith f [0 ..]) (commandP `sepBy1` newline)
+parser = commands <$> (commandP `sepBy1` newline)
   where
-    f prio (bs, cmd) = (bs, pure (prio, cmd))
     location = (decimal <* ",") <#> decimal
     commandP = do
       cmd <- choice [Turn On <$ "turn on"
@@ -73,6 +74,11 @@ parser = fmap (RT.fromListWith (<>) . zipWith f [0 ..]) (commandP `sepBy1` newli
       text " through "
       ub <- location
       return ((lb,ub), cmd)
+
+commands :: [(Bounds Location, Command)] -> Commands
+commands = RT.fromListWith (<>) . zipWith f [0 ..]
+  where
+    f prio (bs, cmd) = (bs, pure (prio, cmd))
 
 test = do
 
@@ -87,6 +93,22 @@ test = do
     it "evaluates correctly" $ do
       let expected = (1000 * 1000) + 2000 - 4
       fmap (\cs -> getBrightness cs boardBounds) mr `shouldBe` Right expected
+
+  describe "collisions" $ do
+    let bs = ((1,1),(10,10))
+        cs = commands [(bs, Toggle)
+                      ,(((5,5),(5,5)), Turn Off)
+                      ,(bs, Turn On)
+                      ,(bs, Toggle)
+                      ]
+    describe "pt1" $ do
+      let expected = 100 - 100
+      it "calculates correctly" $ do
+        countLit cs bs `shouldBe` expected
+    describe "pt2" $ do
+      let expected = (99 * (2 + 1 + 2)) + (1 * (2 - 1 + 1 + 2))
+      it "calculates correctly" $ do
+        getBrightness cs bs `shouldBe` expected
 
   describe "neighbours" $ do
     describe "the eight 3x3 boxes around a 3x3 box" $ do
@@ -145,14 +167,20 @@ getBrightness = go (Endo id)
 -- candidate overlays
 popCommand :: Ord a => (Word -> a) -> Commands -> Bounds Location
            -> Maybe ((Bounds Location, Command), Commands)
-popCommand order cs bs
-           = fmap (f . fmap snd)
-           . listToMaybe
-           . L.sortBy (comparing (order . insertedAt . queryResult))
-           . (>>= \(k, vs) -> (,) k <$> vs)
-           $ query Overlapping bs cs
+popCommand order cs bs = fmap (f . fmap snd) . listToMaybe $ overlaps
   where
-    f (bs', cmd) = ((trim bs bs', cmd), delete bs' cs)
+    overlaps = L.sortBy (comparing (order . insertedAt . queryResult))
+             . (>>= \(k, vs) -> (,) k <$> NE.toList vs)
+             $ query Overlapping bs cs
+    f found = (trimmed found, remove found cs)
+    trimmed (bs', cmd) = (trim bs bs', cmd)
+    remove (bs', _) = RT.alter (pure (popped bs')) bs'
+    popped bs' = NE.nonEmpty
+               . drop 1
+               . fmap queryResult
+               . L.sortBy (comparing (order . insertedAt . queryResult))
+               . filter ((== bs') . fst)
+               $ overlaps
 
 -- trim two overlapping bounds to their intersection
 trim :: Bounds Location -> Bounds Location -> Bounds Location

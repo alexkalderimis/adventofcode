@@ -170,6 +170,12 @@ delete i t = case t of
    untip (Region bs ts) = maybe Tip (Region bs) $ NE.nonEmpty $ NE.filter (not . null) ts
    untip x = x
 
+alter :: (Ix i, Coord i)
+      => (Maybe a -> Maybe a) -> Bounds i -> RTree i a -> RTree i a
+alter f bs t = case f (lookup bs t) of
+  Just x -> insert bs x t
+  Nothing -> delete bs t
+
 null :: RTree i a -> Bool
 null Tip = True
 null _   = False
