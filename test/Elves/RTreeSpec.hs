@@ -121,7 +121,7 @@ dbl = (,) <$> id <*> id
 index' = RT.fromList . fmap (first dbl)
 
 spec :: Spec
-spec = describe "Elves.RTree" $ parallel $ do
+spec = describe "Elves.RTree" $ do
   sizeSpec
   expandSpec
   querySpec
