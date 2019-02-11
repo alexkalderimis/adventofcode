@@ -11,16 +11,18 @@ import           Data.Maybe
 import           Data.Monoid
 import           Data.Ord
 import qualified Data.Text               as T
-import           Elves
-import           Elves.Advent
 import           Text.Parser.Char        (newline, text)
 import           Text.Parser.Combinators (choice, sepBy1)
 
 import           Test.QuickCheck         (Arbitrary (..), choose, property,
                                           (===))
 
+import           Elves
+import           Elves.Advent
 import           Elves.Cartesian
-import           Elves.RTree             (Bounds, QueryStrategy (..), RTree,
+import           Elves.Tiling
+import           Elves.Coord (Bounds)
+import           Elves.RTree             (QueryStrategy (..), RTree,
                                           delete, query)
 import qualified Elves.RTree             as RT
 
@@ -33,23 +35,6 @@ data Command = Turn Lit | Toggle
   deriving (Show, Eq)
 
 type Commands = RTree Location (NonEmpty (Word, Command))
-
-data NeighbourInput = NeighbourInput (Bounds Location) (Bounds Location)
-  deriving (Show, Eq)
-
-instance Arbitrary NeighbourInput where
-  arbitrary = do
-    tly <- choose (0, 1000)
-    tlx <- choose (0, 1000)
-    bly <- choose (tly, 1000)
-    blx <- choose (tlx, 1000)
-
-    tly' <- choose (tly, bly)
-    tlx' <- choose (tlx, blx)
-    bly' <- choose (tly', bly)
-    blx' <- choose (tlx', blx)
-
-    return (NeighbourInput ((tly,tlx),(bly,blx)) ((tly',tlx'),(bly',blx')))
 
 main :: IO ()
 main = day 6 parser pt1 pt2 test
@@ -110,21 +95,6 @@ test = do
       it "calculates correctly" $ do
         getBrightness cs bs `shouldBe` expected
 
-  describe "neighbours" $ do
-    describe "the eight 3x3 boxes around a 3x3 box" $ do
-      let ns = neighbours ((0,0), (8,8)) ((3,3), (5,5))
-      it "all have 9 locations" $ do
-        fmap rangeSize ns `shouldSatisfy` all (== 9)
-    specify "there are at most 8 neighbours" $ property $ \(NeighbourInput outer inner) ->
-      let ns = neighbours outer inner
-       in length ns `elem` [0 .. 8]
-    specify "no neighbour is bigger than the outer region" $ property $ \(NeighbourInput outer inner) ->
-      let ns = neighbours outer inner
-       in rangeSize outer > maximum (rangeSize <$> ns)
-    it "accounts for all the locations" $ property $ \(NeighbourInput outer inner) ->
-      let ns = neighbours outer inner
-       in rangeSize outer === sum (rangeSize <$> inner : ns)
-
 exampleInput = T.unlines
   ["turn on 0,0 through 999,999"
   ,"toggle 0,0 through 999,0"
@@ -182,73 +152,6 @@ popCommand order cs bs = fmap (f . fmap snd) . listToMaybe $ overlaps
                . filter ((== bs') . fst)
                $ overlaps
 
--- trim two overlapping bounds to their intersection
-trim :: Bounds Location -> Bounds Location -> Bounds Location
-trim a b = ((max (topEdge a) (topEdge b), max (leftEdge a) (leftEdge b))
-           ,(min (btmEdge a) (btmEdge b), min (rightEdge a) (rightEdge b))
-           )
-
--- returns the bounds of the eight neighbours: TL, L, BL, T, B, TR, R, BR
---  
---   outer
---  a--------b-----------c--------d  -
---  | TL     |    T      |  TR    |  | Top-margin
---  |       f|           g        |  |
---  e--------+-----------+g'------h  -
---  | L      |inner      |  R     |  | Inner-height
---  |        |           |        |  |
---  i-------j+-----------k--------l  -
---  | BL     j'   B      |  BR    |  | Bottom-margin
---  |        |           |        |  |
---  m-------n-----------o---------p  -
---
---  |--------|-----------|--------|
---    Left     Inner       Right
---    margin   width       margin
---
-neighbours :: Bounds Location -> Bounds Location -> [Bounds Location]
-neighbours outer inner = concat [tl, l_, bl, t_, b_, tr, r_, br]
-  where
-    tl = [ (a, f)  | leftMarginExists && topMarginExists ]
-    l_ = [ (e, j)  | leftMarginExists ]
-    bl = [ (i, n)  | leftMarginExists && bottomMarginExists ]
-    t_ = [ (b, g)  | topMarginExists ]
-    b_ = [ (j', o) | bottomMarginExists ]
-    tr = [ (c, h)  | topMarginExists && rightMarginExists ]
-    r_ = [ (g', l) | rightMarginExists ]
-    br = [ (k, p)  | bottomMarginExists && rightMarginExists ]
-
-    leftMarginExists   = leftEdge outer  < leftEdge inner
-    topMarginExists    = topEdge outer   < topEdge inner
-    rightMarginExists  = rightEdge inner < rightEdge outer
-    bottomMarginExists = btmEdge inner   < btmEdge outer
-
-    -- minor adjustments are made to exclude inner
-    a = topLeft outer
-    b = move North topMargin (topLeft inner)
-    c = right $ move North topMargin (topRight inner)
-    d = topRight outer
-    e = move South topMargin a
-    f = up . left $ topLeft inner
-    g = up $ topRight inner
-    g' = right $ topRight inner
-    h = up $ move East rightMargin (topRight inner)
-    i = move South (innerHeight + 1) e
-    j = left $ btmLeft inner
-    j' = down $ btmLeft inner
-    k = move South (innerHeight + 1) g'
-    l = move East rightMargin (btmRight inner)
-    m = btmLeft outer
-    n = left $ move South bottomMargin (btmLeft inner)
-    o = move South bottomMargin (btmRight inner)
-    p = btmRight outer
-
-    leftMargin = leftEdge inner - leftEdge outer
-    topMargin  = topEdge inner - topEdge outer
-    bottomMargin = btmEdge outer - btmEdge inner
-    rightMargin = rightEdge outer - rightEdge inner
-    innerHeight = btmEdge inner - topEdge inner
-
 -- Bunch of aliases for fst and snd to make life saner:
 
 insertedAt :: (Word, Command) -> Word
@@ -256,40 +159,3 @@ insertedAt = fst
 
 queryResult :: (Bounds Location, (Word, Command)) -> (Word, Command)
 queryResult = snd
-
-leftEdge :: Bounds Location -> XPos
-leftEdge = x . lb
-
-rightEdge :: Bounds Location -> XPos
-rightEdge = x . ub
-
-topEdge :: Bounds Location -> YPos
-topEdge = y . lb
-
-btmEdge :: Bounds Location -> YPos
-btmEdge = y . ub
-
-topLeft :: Bounds Location -> Location
-topLeft = topEdge &&& leftEdge
-
-topRight :: Bounds Location -> Location
-topRight = topEdge &&& rightEdge
-
-btmRight :: Bounds Location -> Location
-btmRight = btmEdge &&& rightEdge
-
-btmLeft :: Bounds Location -> Location
-btmLeft = btmEdge &&& leftEdge
-
-lb :: Bounds Location -> Location
-lb = fst
-
-ub :: Bounds Location -> Location
-ub = snd
-
-x :: Location -> Int
-x = snd
-
-y :: Location -> Int
-y = fst
-
