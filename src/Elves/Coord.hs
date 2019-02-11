@@ -10,6 +10,8 @@ import qualified Data.Ix as Ix
 import qualified Data.List as L
 import           Control.Lens              hiding (contains, index)
 
+type Bounds i = (i,i)
+
 type Accessor a b = ReifiedLens a a b b
 
 data Heuristic = Euclidean | Manhattan deriving (Show, Eq, Bounded, Enum)

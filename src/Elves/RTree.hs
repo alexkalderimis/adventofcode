@@ -37,8 +37,6 @@ import           Test.QuickCheck.Gen       (suchThat)
 import           Elves.Coord
 import           Elves.Core
 
-type Bounds i = (i,i)
-
 newtype ValidBounds i = ValidBounds
   { getValidBounds :: (i,i)
   } deriving (Show, Eq)
@@ -139,6 +137,9 @@ locations = F.toList . fmap fst . indexed
 assocs :: RTree i a -> [((i,i),a)]
 assocs = F.toList . indexed
 
+elems :: RTree i a -> [a]
+elems = F.toList
+
 maxPageSize :: Int
 maxPageSize = 4 -- tuneable page size
 
@@ -170,6 +171,7 @@ delete i t = case t of
    untip (Region bs ts) = maybe Tip (Region bs) $ NE.nonEmpty $ NE.filter (not . null) ts
    untip x = x
 
+-- edit a value in place, with the option to insert/delete
 alter :: (Ix i, Coord i)
       => (Maybe a -> Maybe a) -> Bounds i -> RTree i a -> RTree i a
 alter f bs t = case f (lookup bs t) of
