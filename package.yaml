@@ -80,6 +80,7 @@ executables:
     - transformers
     - parallel
     - pretty
+    - parser-combinators
 
 tests:
   adventofcode-test:
