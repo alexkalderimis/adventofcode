@@ -17,6 +17,7 @@ module Elves (
   consider, which,
   interleave,
   unterleave,
+  collapseForest,
   (<#>),
   module X
   ) where
@@ -133,3 +134,7 @@ unterleave = go ([],[])
   where
     go (xs,ys) (a:b:cs) = go (a:xs,b:ys) cs
     go (xs,ys) cs       = (reverse xs ++ cs, reverse ys)
+
+collapseForest :: Monoid a => (Forest a -> a) -> Tree a -> a
+collapseForest f (Node a fs) = a <> f fs
+

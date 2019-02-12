@@ -1,14 +1,29 @@
 snippet advent
 options head
-  import Elves
-  import Elves.Advent
-  
-  main :: IO ()
-  main = day ${1:N} parser pt1 pt2 test
-    where
-      parser = pure ()
-      pt1 () = error "unimplemented"
-      pt2 () = error "unimplemented"
-  
-  test = do
-    pure ()
+	import qualified Data.Text as T
+	import           Data.Text (Text)
+	import qualified Data.Attoparsec.Text as A
+
+	import Elves
+	import Elves.Advent
+	
+	main :: IO ()
+	main = day ${1:N} parser pt1 pt2 test
+	  where
+	    parser = A.takeText
+	    pt1 _ = error "unimplemented"
+	    pt2 _ = error "unimplemented"
+	
+	test = do
+	  pure ()
+
+snippet data-map-strict
+options head
+	import qualified Data.Map.Strict as ${1:M}
+	import           Data.Map.Strict (Map)
+
+snippet parsing
+options head
+	import           Control.${1:Applicative}.Combinators
+	import           Data.Attoparsec.Text            (${2:decimal})
+	import           Text.Parser.Char (${3:newline})
