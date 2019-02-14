@@ -18,6 +18,9 @@ module Elves (
   interleave,
   unterleave,
   collapseForest,
+  atMost, atLeast,
+  on2,
+  (.*),
   (<#>),
   module X
   ) where
@@ -136,4 +139,21 @@ unterleave :: [a] -> ([a], [a])
 unterleave = go ([],[])
   where
     go (xs,ys) (a:b:cs) = go (a:xs,b:ys) cs
-    go (xs,ys) cs       = (reverse xs ++ cs, reverse ys)
+    go (xs,ys) cs       = (reverse xs <> cs, reverse ys)
+
+-- I constantly confuse myself when using min/max to enforce
+-- bounds - this helps.
+atMost :: Ord a => a -> a -> a
+atMost = min
+
+atLeast :: Ord a => a -> a -> a
+atLeast = max
+
+-- transform arguments before applying to a binary function
+on2 :: (a -> b -> c) -> (d -> a) -> (e -> b) -> d -> e -> c
+on2 f da eb d e = f (da d) (eb e)
+
+-- from Control.Composition
+-- eg: flooring addition => atLeast 0 . (+)
+(.*) :: (c -> d) -> (a -> b -> c) -> a -> b -> d
+(f .* g) a b = f (g a b)
