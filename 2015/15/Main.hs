@@ -5,7 +5,6 @@
 import           Control.Applicative.Combinators
 import           Data.Attoparsec.Text            (decimal, signed)
 import qualified Data.Attoparsec.Text            as A
-import           Data.Containers.ListUtils       (nubOrd)
 import qualified Data.HashMap.Strict             as Map
 import qualified Data.List                       as L
 import           Data.Maybe
@@ -19,12 +18,8 @@ import           Text.Parser.Char                (newline)
 
 import           Test.QuickCheck
 
-import qualified Numeric.AD                      as AD
-
 import           Elves
 import           Elves.Advent
-
-import           Debug.Trace                     as Debug
 
 type Map = Map.HashMap
 
@@ -189,7 +184,7 @@ measure is vs = cookieScore . mconcat $ zipWith useIngredient vs is
 bestRecipe :: Teaspoons -> Recipe Int -> Recipe Int
 bestRecipe n r = Map.fromList [(name, (n, i)) | (n, (name, i)) <- zip vs namedIs]
   where
-    namedIs = take 2 $ fmap snd <$> Map.toList r
+    namedIs = fmap snd <$> Map.toList r
     reg = head . dropWhile ((< Map.size r) . length) $ iterate (extrema (dbl n)) []
     is = fmap snd namedIs
     vs = integralPoint is $ bestPoint reg is (head reg)
@@ -230,6 +225,9 @@ test = do
     it "can find the optimum recipe" $ do
       let bake = cookieScore . bakeCookie . bestRecipe 100
       fmap bake rec `shouldBe` Right optimum
+    it "sets the recipe correctly" $ do
+      let f = setQuantity "Butterscotch" 44 . setQuantity "Cinnamon" 56
+      fmap (bestRecipe 100) rec `shouldBe` fmap f rec
     specify "the recipe contains exactly n teaspoons" . property
       $ \(Positive n) ->
         fmap (sum . fmap fst . Map.elems . bestRecipe n) rec === Right n
