@@ -1,32 +1,36 @@
+{-# LANGUAGE DeriveFunctor     #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE TupleSections     #-}
 
-import Data.Sequence (Seq, ViewL(..))
-import qualified Data.Sequence as Seq
-import Data.Maybe
-import Data.Monoid
-import Data.Ord
-import Data.Containers.ListUtils (nubOrd)
 import           Control.Applicative.Combinators
 import           Data.Attoparsec.Text            (decimal, signed)
 import qualified Data.Attoparsec.Text            as A
+import           Data.Containers.ListUtils       (nubOrd)
 import qualified Data.HashMap.Strict             as Map
 import qualified Data.List                       as L
+import           Data.Maybe
+import           Data.Monoid
+import           Data.Ord
+import           Data.Sequence                   (Seq, ViewL (..))
+import qualified Data.Sequence                   as Seq
 import           Data.Text                       (Text)
 import qualified Data.Text                       as T
 import           Text.Parser.Char                (newline)
 
 import           Test.QuickCheck
 
-import qualified Numeric.AD as AD
+import qualified Numeric.AD                      as AD
 
 import           Elves
 import           Elves.Advent
 
-import Debug.Trace as Debug
+import           Debug.Trace                     as Debug
 
 type Map = Map.HashMap
+
+-- nicer names for these things
+type Point a = [a]
+type Region a = [Point a]
 
 -- an Ingredient is a Vector in the mathematical sense: it can be scaled
 -- (in terms of quantities) and added together.
@@ -77,31 +81,33 @@ cookieScore x = product $ fmap (atLeast 0 . ($ x))
 midpoint :: [Double] -> [Double] -> [Double]
 midpoint = zipWith (\a b -> (a + b) / 2)
 
-regionCentre :: Fractional a => [[a]] -> [a]
+regionCentre :: Fractional a => Region a -> Point a
 regionCentre es = let n = fromIntegral $ length es
                    in [sum p / n | p <- L.transpose es]
 
-extrema :: Num a => a -> [[a]] -> [[a]]
+-- expand the region by a new dimension
+extrema :: Num a => a -> Region a -> Region a
 extrema n [] = [[n]]
 extrema n es = (n : fmap (pure 0) es) : fmap (0 :) es
 
 -- Split a region (defined by extrema) into a set of sub-regions
-split :: Eq a => [a] -> a -> [[a]]
+split :: Eq a => Region a -> Point a -> [Region a]
 split reg p = fmap (\e -> p : filter (/= e) reg) reg
 
 -- move this point one step closer to the goal
-move :: (Ord b, Num a) => ([a] -> b) -> ([a] -> Bool) -> a -> [a] -> [a]
+move :: (Ord objective, Num a)
+     => (Point a -> objective) -> (Point a -> Bool) -> a -> Point a -> Point a
 move obj constraint eta p = L.maximumBy (comparing obj)
                           . filter constraint
                           $ expand eta p
 
 -- return this point, expanded by +/- eta in all dimensions, as well
 -- as the point itself
-expand :: Num a => a -> [a] -> [[a]]
-expand _ [] = [[]]
+expand :: Num a => a -> Point a -> [Point a]
+expand _ []       = [[]]
 expand eta (p:ps) = (:) <$> [p, p - eta, p + eta] <*> expand eta ps
 
-distance :: Floating c => [c] -> [c] -> c
+distance :: Floating c => Point c -> Point c -> c
 distance a b = sqrt . product $ zipWith (*) a b
 
 -- Now the interesting bit: this problem has two states - either
@@ -115,7 +121,7 @@ distance a b = sqrt . product $ zipWith (*) a b
 -- generate an infinite stream of points that are converging
 -- to the objective, and then pick the best one
 followGradiant :: (Ord objective, Floating var, Ord var) =>
-     ([var] -> objective) -> ([var] -> Bool) -> var -> var -> [var] -> [var]
+     (Point var -> objective) -> (Point var -> Bool) -> var -> var -> Point var -> Point var
 followGradiant obj constraint eta theta p
   = converge $ iterate (move obj constraint eta) p
   where
@@ -131,7 +137,7 @@ followGradiant obj constraint eta theta p
 -- to try and find at least one feasible point
 -- We stop splitting when the split is too small
 findFeasible :: (Ord objective, Num objective, Ord var, Floating var) =>
-  ([var] -> objective) -> [[var]] -> [var] -> Maybe [var]
+  (Point var -> objective) -> Region var -> Point var -> Maybe (Point var)
 findFeasible obj reg p
   | feasible p = Just p
   | otherwise = go (Seq.singleton (reg, regionCentre reg))
@@ -150,17 +156,17 @@ findFeasible obj reg p
 -- first find a feasible point, then follow the gradiant to the
 -- best point. If this dimension is not solvable, it will return
 -- an unfeasible point.
-solveDimension :: Int -> [Ingredient Int] -> [[Double]] -> [Double] -> [Double]
+solveDimension :: (Integral i, Ord a, Floating a) =>
+   Int -> [Ingredient i] -> Region a -> Point a -> Point a
 solveDimension n is es p =
-  let obj = measure is
+  let obj = measure (fmap (fmap fromIntegral) is)
       g = ((== fromIntegral n) . sum)
       feasible = fromMaybe p $ findFeasible obj es p
    in followGradiant obj g 1 0.5 feasible
 
 -- turn the ingredients into an objective function
-measure :: (Num a, Ord a) => [Ingredient Int] -> [a] -> a
-measure is vs = cookieScore . mconcat
-              . zipWith useIngredient vs $ fmap (fmap fromIntegral) is
+measure :: (Num a, Ord a) => [Ingredient a] -> [a] -> a
+measure is vs = cookieScore . mconcat $ zipWith useIngredient vs is
 
 -- this is a problem in linear optimization, specifically it requires
 -- us to maximise the value of the cookieScore under the constraint
@@ -185,7 +191,7 @@ bestRecipe n r = Map.fromList [(name, (n, i)) | (n, (name, i)) <- zip vs es]
   where
     namedIs = fmap snd <$> Map.toList r
     (_, vs, es) = L.foldl' go ([], [], []) namedIs
-    
+
     go (reg, vs, es) e = case vs of
       [] -> (extrema (dbl n) reg, [n], [e])
       _  -> let es' = e : es
