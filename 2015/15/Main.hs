@@ -64,7 +64,7 @@ main :: IO ()
 main = day 15 parser pt1 pt2 test
   where
     pt1 = print . cookieScore . bakeCookie . bestRecipe 100
-    pt2 _ = error "unimplemented"
+    pt2 = print
 
 setQuantity :: Text -> a -> Recipe a -> Recipe a
 setQuantity k n = Map.adjust (\(_, i) -> (n,i)) k
@@ -185,22 +185,18 @@ measure is vs = cookieScore . mconcat $ zipWith useIngredient vs is
 -- (see butterscotch-cinnamon.png in this directory)
 --
 -- Unfortunately the discontinuities in the function prevent us from using
--- the Lagrangian method directly, so we solve this one dimension at a time
+-- the Lagrangian method directly, so we use a two stage solution
 bestRecipe :: Teaspoons -> Recipe Int -> Recipe Int
-bestRecipe n r = Map.fromList [(name, (n, i)) | (n, (name, i)) <- zip vs es]
+bestRecipe n r = Map.fromList [(name, (n, i)) | (n, (name, i)) <- zip vs namedIs]
   where
-    namedIs = fmap snd <$> Map.toList r
-    (_, vs, es) = L.foldl' go ([], [], []) namedIs
-
-    go (reg, vs, es) e = case vs of
-      [] -> (extrema (dbl n) reg, [n], [e])
-      _  -> let es' = e : es
-                reg' = extrema (dbl n) reg
-             in (reg', bestPoint reg' (snd <$> es') (0 : vs), es')
+    namedIs = take 2 $ fmap snd <$> Map.toList r
+    reg = head . dropWhile ((< Map.size r) . length) $ iterate (extrema (dbl n)) []
+    is = fmap snd namedIs
+    vs = integralPoint is $ bestPoint reg is (head reg)
 
     -- run the solver on the point, mapping back and forth between
     -- integral and floating-point coordindates
-    bestPoint reg is = integralPoint is . solveDimension n is reg . fmap dbl
+    bestPoint reg is = solveDimension n is reg
 
     -- take a continuous point and return an integral one
     integralPoint is = L.maximumBy (comparing (measure is))
