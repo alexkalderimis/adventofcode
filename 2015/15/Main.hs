@@ -1,4 +1,5 @@
 {-# LANGUAGE DeriveFunctor     #-}
+{-# LANGUAGE RankNTypes     #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TupleSections     #-}
 
@@ -26,6 +27,13 @@ type Map = Map.HashMap
 -- nicer names for these things
 type Point a = [a]
 type Region a = [Point a]
+
+type Constraint a = Point a -> Bool
+
+data Constrained b = Constrained (forall a. Ingredient a -> a) b
+
+instance Functor Constrained where
+  fmap f (Constrained fld v) = Constrained fld (f v)
 
 -- an Ingredient is a Vector in the mathematical sense: it can be scaled
 -- (in terms of quantities) and added together.
@@ -58,7 +66,7 @@ type Recipe a = Map Text (a, Ingredient a)
 main :: IO ()
 main = day 15 parser pt1 pt2 test
   where
-    pt1 = print . cookieScore . bakeCookie . bestRecipe 100
+    pt1 = print . cookieScore . bakeCookie . bestRecipe 100 []
     pt2 = print
 
 setQuantity :: Text -> a -> Recipe a -> Recipe a
@@ -91,7 +99,7 @@ split reg p = fmap (\e -> p : filter (/= e) reg) reg
 
 -- move this point one step closer to the goal
 move :: (Ord objective, Num a)
-     => (Point a -> objective) -> (Point a -> Bool) -> a -> Point a -> Point a
+     => (Point a -> objective) -> Constraint a -> a -> Point a -> Point a
 move obj constraint eta p = L.maximumBy (comparing obj)
                           . filter constraint
                           $ expand eta p
@@ -116,7 +124,7 @@ distance a b = sqrt . product $ zipWith (*) a b
 -- generate an infinite stream of points that are converging
 -- to the objective, and then pick the best one
 followGradiant :: (Ord objective, Floating var, Ord var) =>
-     (Point var -> objective) -> (Point var -> Bool) -> var -> var -> Point var -> Point var
+     (Point var -> objective) -> Constraint var -> var -> var -> Point var -> Point var
 followGradiant obj constraint eta theta p
   = converge $ iterate (move obj constraint eta) p
   where
@@ -151,11 +159,10 @@ findFeasible obj reg p
 -- first find a feasible point, then follow the gradiant to the
 -- best point. If this dimension is not solvable, it will return
 -- an unfeasible point.
-solveDimension :: (Integral i, Ord a, Floating a) =>
-   Int -> [Ingredient i] -> Region a -> Point a -> Point a
-solveDimension n is es p =
-  let obj = measure (fmap (fmap fromIntegral) is)
-      g = ((== fromIntegral n) . sum)
+solveDimension :: (Ord a, Floating a) =>
+   Constraint a -> [Ingredient a] -> Region a -> Point a -> Point a
+solveDimension g is es p =
+  let obj = measure is
       feasible = fromMaybe p $ findFeasible obj es p
    in followGradiant obj g 1 0.5 feasible
 
@@ -181,25 +188,31 @@ measure is vs = cookieScore . mconcat $ zipWith useIngredient vs is
 --
 -- Unfortunately the discontinuities in the function prevent us from using
 -- the Lagrangian method directly, so we use a two stage solution
-bestRecipe :: Teaspoons -> Recipe Int -> Recipe Int
-bestRecipe n r = Map.fromList [(name, (n, i)) | (n, (name, i)) <- zip vs namedIs]
+bestRecipe :: Teaspoons -> [Constrained Int] -> Recipe Int -> Recipe Int
+bestRecipe n cs r = Map.fromList [(name, (n, i)) | (n, (name, i)) <- zip vs namedIs]
   where
     namedIs = fmap snd <$> Map.toList r
     reg = head . dropWhile ((< Map.size r) . length) $ iterate (extrema (dbl n)) []
-    is = fmap snd namedIs
-    vs = integralPoint is $ bestPoint reg is (head reg)
-
-    -- run the solver on the point, mapping back and forth between
-    -- integral and floating-point coordindates
-    bestPoint reg is = solveDimension n is reg
+    -- run the solver on the point, mapping back to integral coordindates
+    vs = let is = fmap (fmap dbl . snd) namedIs
+             g = constraint is (dbl n) (fmap dbl <$> cs)
+          in integralPoint $ solveDimension g is reg (head reg)
 
     -- take a continuous point and return an integral one
-    integralPoint is = L.maximumBy (comparing (measure is))
-                       . filter ((== n) . sum)
-                       . foldr (\x -> ([(floor x :), (ceiling x :)] <*>)) (pure [])
+    integralPoint = let is = fmap snd namedIs
+                     in L.maximumBy (comparing (measure is))
+                        . filter (constraint is n cs)
+                        . foldr (\x -> ([(floor x :), (ceiling x :)] <*>)) (pure [])
 
     dbl :: Int -> Double
     dbl = fromIntegral
+
+constraint :: (Eq a, Num a) => [Ingredient a] -> a -> [Constrained a] -> Constraint a
+constraint is n = L.foldl' compileConstraint ((== n) . sum)
+  where
+    compileConstraint f (Constrained fld v) pnt =
+      let val = sum . fmap fld $ zipWith useIngredient pnt is
+       in f pnt && (v == val)
 
 parser :: Parser (Recipe Int)
 parser = fmap Map.fromList (ingredient `sepBy1` newline)
@@ -223,14 +236,14 @@ test = do
 
   describe "bestRecipe" $ do
     it "can find the optimum recipe" $ do
-      let bake = cookieScore . bakeCookie . bestRecipe 100
+      let bake = cookieScore . bakeCookie . bestRecipe 100 []
       fmap bake rec `shouldBe` Right optimum
     it "sets the recipe correctly" $ do
       let f = setQuantity "Butterscotch" 44 . setQuantity "Cinnamon" 56
-      fmap (bestRecipe 100) rec `shouldBe` fmap f rec
+      fmap (bestRecipe 100 []) rec `shouldBe` fmap f rec
     specify "the recipe contains exactly n teaspoons" . property
       $ \(Positive n) ->
-        fmap (sum . fmap fst . Map.elems . bestRecipe n) rec === Right n
+        fmap (sum . fmap fst . Map.elems . bestRecipe n []) rec === Right n
 
 exampleInput = T.unlines $ fmap T.unwords
   [["Butterscotch: capacity -1, durability -2,"
