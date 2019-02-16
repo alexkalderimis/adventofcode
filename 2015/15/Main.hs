@@ -3,6 +3,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TupleSections     #-}
 
+import Data.Containers.ListUtils (nubOrd)
 import           Control.Applicative.Combinators
 import           Data.Attoparsec.Text            (decimal, signed)
 import qualified Data.Attoparsec.Text            as A
@@ -22,6 +23,8 @@ import           Test.QuickCheck
 import           Elves
 import           Elves.Advent
 
+import qualified Debug.Trace as Debug
+
 type Map = Map.HashMap
 
 -- nicer names for these things
@@ -34,6 +37,8 @@ data Constrained b = Constrained (forall a. Ingredient a -> a) b
 
 instance Functor Constrained where
   fmap f (Constrained fld v) = Constrained fld (f v)
+
+
 
 -- an Ingredient is a Vector in the mathematical sense: it can be scaled
 -- (in terms of quantities) and added together.
@@ -66,8 +71,9 @@ type Recipe a = Map Text (a, Ingredient a)
 main :: IO ()
 main = day 15 parser pt1 pt2 test
   where
-    pt1 = print . cookieScore . bakeCookie . bestRecipe 100 []
-    pt2 = print
+    score = print . cookieScore . bakeCookie 
+    pt1 = score . bestRecipe 100 []
+    pt2 = score . bestRecipe 100 [Constrained calories 500]
 
 setQuantity :: Text -> a -> Recipe a -> Recipe a
 setQuantity k n = Map.adjust (\(_, i) -> (n,i)) k
@@ -98,17 +104,21 @@ split :: Eq a => Region a -> Point a -> [Region a]
 split reg p = fmap (\e -> p : filter (/= e) reg) reg
 
 -- move this point one step closer to the goal
-move :: (Ord objective, Num a)
+move :: (Ord objective, Num a, Ord a)
      => (Point a -> objective) -> Constraint a -> a -> Point a -> Point a
-move obj constraint eta p = L.maximumBy (comparing obj)
-                          . filter constraint
-                          $ expand eta p
+move obj constraint eta p = go (expand eta p)
+  where
+    go ps = case filter constraint ps of
+      [] -> go $ nubOrd (ps >>= expand eta)
+      ps' -> L.maximumBy (comparing obj) ps'
 
 -- return this point, expanded by +/- eta in all dimensions, as well
 -- as the point itself
-expand :: Num a => a -> Point a -> [Point a]
-expand _ []       = [[]]
-expand eta (p:ps) = (:) <$> [p, p - eta, p + eta] <*> expand eta ps
+expand :: (Ord a, Num a) => a -> Point a -> [Point a]
+expand eta = go
+  where
+   go []     = [[]]
+   go (p:ps) = (:) <$> [p, p - eta, p + eta] <*> go ps
 
 distance :: Floating c => Point c -> Point c -> c
 distance a b = sqrt . product $ zipWith (*) a b
@@ -238,12 +248,18 @@ test = do
     it "can find the optimum recipe" $ do
       let bake = cookieScore . bakeCookie . bestRecipe 100 []
       fmap bake rec `shouldBe` Right optimum
+    it "can find the optimum calorie constrained recipe" $ do
+      let bake = cookieScore . bakeCookie
+                             . bestRecipe 100 [Constrained calories 500]
+      fmap bake rec `shouldBe` Right 57600000
+
     it "sets the recipe correctly" $ do
       let f = setQuantity "Butterscotch" 44 . setQuantity "Cinnamon" 56
       fmap (bestRecipe 100 []) rec `shouldBe` fmap f rec
     specify "the recipe contains exactly n teaspoons" . property
       $ \(Positive n) ->
         fmap (sum . fmap fst . Map.elems . bestRecipe n []) rec === Right n
+
 
 exampleInput = T.unlines $ fmap T.unwords
   [["Butterscotch: capacity -1, durability -2,"
