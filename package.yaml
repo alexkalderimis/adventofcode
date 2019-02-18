@@ -98,6 +98,7 @@ tests:
     - containers
     - lens
     - async
+    - text
     - unordered-containers
 
 benchmarks:
