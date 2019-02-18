@@ -64,12 +64,12 @@ main = day 14 parser pt1 pt2 test
 test = do
   let mrs = parseOnly parser exampleInput
 
-  describe "pt1 example" $ do
+  describe "pt1 example" $
     specify "Comet is in the lead after 1000s" $ do
       let winner = L.maximumBy . comparing $ distanceAfter (Seconds 1000)
       fmap (name . winner) mrs `shouldBe` Right "Comet"
 
-  describe "pt2 example" $ do
+  describe "pt2 example" $
     specify "Dancer wins after 1000s" $ do
       let points = raceWithPoints (Seconds 1000) <$> mrs
           expected = M.fromList [("Comet", 312), ("Dancer", 689)]
