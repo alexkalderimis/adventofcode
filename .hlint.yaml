@@ -49,6 +49,7 @@
 
 # Ignore some builtin hints
 - ignore: {name: Redundant do}
+- ignore: {name: Use foldr}
 # - ignore: {name: Use const, within: SpecialModule} # Only within certain modules
 
 

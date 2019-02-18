@@ -9,7 +9,7 @@ import           Prelude                   hiding (lookup, null)
 import           Control.Applicative       hiding (empty)
 import           Control.Arrow             (first)
 import           Control.DeepSeq           (NFData (..))
-import           Control.Lens              hiding (contains, index, indexed)
+import           Control.Lens              hiding (contains, indexed)
 import           Data.Foldable             (Foldable (foldMap))
 import qualified Data.Foldable             as F
 import           Data.Function             (on)
@@ -120,6 +120,14 @@ instance (Coord i, Eq i, Eq a) => Eq (RTree i a) where
   a == b = case bounds a <|> bounds b of
              Nothing -> True
              Just (lb,_) -> priorityOrder straightLine lb a == priorityOrder straightLine lb b
+
+point :: Coord i => i -> Bounds i
+point i = (i,i)
+
+-- inverse of 'point' - whether or not this is in fact a point
+-- is not checked.
+getPoint :: Coord i => Bounds i -> i
+getPoint = fst
 
 bounds :: RTree i a -> Maybe (Bounds i)
 bounds (Leaf b _)   = Just b
