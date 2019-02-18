@@ -2,6 +2,7 @@
 
 module Elves.Math.SymbolicSpec where
 
+import Control.Applicative
 import Test.Hspec
 import Test.QuickCheck
 
@@ -110,7 +111,10 @@ spec = describe "Elves.Math.Symbolic" $ do
       dxx e `shouldBe` (0.5 * (((squareOf x + 1) ** (-0.5)) * (2 * x)))
 
 a ==~ b = counterexample (unwords [show a, "/=~", show b])
-          $ case (a,b) of
-            (Left err, Left err') -> err == err'
-            (Right val, Right val') -> (isInfinite val && isInfinite val') || abs (val - val') < 0.0000001
-            _ -> False
+  $ case (a,b) of
+      (Left err, Left err') -> err == err'
+      _ -> either (pure False) id $ liftA2 kindaEqual a b
+
+kindaEqual a b =  (isInfinite a && isInfinite b)
+               || (isNaN a && isNaN b) -- shouldn't happen, but good to check 
+               || abs (a - b) < 0.0000001
