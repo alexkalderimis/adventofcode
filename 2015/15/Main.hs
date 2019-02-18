@@ -106,25 +106,21 @@ measure is vs = cookieScore . mconcat $ appliedIs
 -- Specifically, the Butterscotch and Cinnamon problem below can be respresented
 -- with this graph: https://www.desmos.com/calculator/davvpx6roe
 -- (see butterscotch-cinnamon.png in this directory)
---
--- Unfortunately the discontinuities in the function prevent us from using
--- the Lagrangian method directly, so we use a two stage solution
-bestRecipe :: Teaspoons -> [Constrained Int] -> Recipe Int -> Recipe Int
+bestRecipe :: (Num a, Enum a, Ord a) => a -> [Constrained a] -> Recipe a -> Recipe a
 bestRecipe n cs r = Map.fromList [(name, useIngredient n i) | (n, (name, i)) <- zip vs namedIs]
   where
     namedIs = Map.toList r
-    is = snd <$> namedIs
+    is      = snd <$> namedIs
+
     -- search the constrained plane
-    vs = L.maximumBy (comparing (measure is))
-       . filter (test is cs)
+    vs = L.maximumBy (comparing obj)
+       . filter test
        $ planePoints n (L.genericLength is)
 
-    test is cs vs = all (\c -> predicate is c vs) cs
-    predicate is c vs =
-      let (Constrained f goal) = c
-       in goal == f (mconcat $ zipWith useIngredient vs is)
+    obj = measure is
+    test vs = all (predicate vs) cs
 
-    -- inside = and . zipWith (\[lb,ub] p -> lb <= p && p <= ub) (L.transpose reg)
+    predicate vs (Constrained f goal) = goal == f (mconcat $ zipWith useIngredient vs is)
 
 parser :: Parser (Recipe Int)
 parser = fmap Map.fromList (ingredient `sepBy1` newline)
@@ -141,7 +137,7 @@ parser = fmap Map.fromList (ingredient `sepBy1` newline)
 
 -- generate just the points in the plane, without even
 -- considering any other irrelevant points.
-planePoints :: Int -> Word -> [Point Int]
+planePoints :: (Num a, Enum a) => a -> Word -> [Point a]
 planePoints total = untree . summingTree total
   where
     summingTree t 0 = []
@@ -155,7 +151,9 @@ test = do
       optimum = 62842880
   describe "planePoints" $ do
     -- purposely small-ish inputs
-    let inputs      = choose (1, 50) <#> choose (1, 5)
+    let inputs :: Gen (Int, Word)
+        inputs      = choose (1, 50) <#> choose (1, 5)
+        smallInputs :: Gen (Int, Word)
         smallInputs = choose (1, 20) <#> choose (1, 4)
     let totalSpace t n = (t + 1) ^ fromIntegral n
     specify "all points sum to the given value" . property
