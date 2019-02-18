@@ -13,8 +13,14 @@ derivative (Constant x)    = Constant 0
 derivative (Fixed    x)    = Constant 0
 --product rule (ab' + a'b)
 derivative (a `Mul` b)       = (a `Mul` derivative b) `Add` (b `Mul` derivative a) -- product rule
- --power rule (xa^(x-1) * a')
-derivative (a `Raise` b)       = (b * (a `Raise` (b - 1))) * derivative a
+
+derivative f@(a `Raise` b) = case a of 
+  -- exponentiol derivative is generally smaller than using the power rule
+  Constant x -> f * Constant (log x) * derivative b
+  Fixed x    -> f * log a * derivative b
+  -- power rule (xa^(x-1) * a')
+  _        -> (b * (a `Raise` (b - 1))) * derivative a
+
 -- sum of derivatives
 derivative (a `Add` b)       = derivative a `Add` derivative b
  -- quotient rule ( (a'b - b'a) / b^2 )
@@ -23,19 +29,19 @@ derivative (a `Divide` b) = ((derivative a `Mul` b) `Add` negate' (derivative b 
 derivative (Application f a) = dfun * derivative a
   where
     dfun = case f of Absolute -> a / abs a
-                     SigNum -> 0 * (1 / signum a)
-                     Sin -> cos a
-                     Cos -> 1 - sin a
-                     Tan -> 1 / squareOf (cos a)
-                     ASin -> 1 / sqrt (1 - squareOf a)
-                     ACos -> negate (1 / sqrt (1 - squareOf a))
-                     ATan -> 1 / (squareOf a + 1)
-                     SinH -> cosh a
-                     CosH -> sinh a
-                     TanH -> 1 - squareOf (tanh a)
-                     ASinH -> 1 / sqrt (squareOf a + 1)
-                     ACosH -> 1 / sqrt (squareOf a - 1)
-                     ATanH -> 1 / (1 - squareOf a)
-                     Exp -> exp a -- derivative of exponentiol is the exponentiol
-                     Logn -> 1 / a
+                     SigNum   -> 0 * (1 / signum a)
+                     Sin      -> cos a
+                     Cos      -> 1 - sin a
+                     Tan      -> 1 / squareOf (cos a)
+                     ASin     -> 1 / sqrt (1 - squareOf a)
+                     ACos     -> negate (1 / sqrt (1 - squareOf a))
+                     ATan     -> 1 / (squareOf a + 1)
+                     SinH     -> cosh a
+                     CosH     -> sinh a
+                     TanH     -> 1 - squareOf (tanh a)
+                     ASinH    -> 1 / sqrt (squareOf a + 1)
+                     ACosH    -> 1 / sqrt (squareOf a - 1)
+                     ATanH    -> 1 / (1 - squareOf a)
+                     Exp      -> exp a -- derivative of exponentiol is the exponentiol
+                     Logn     -> 1 / a
 

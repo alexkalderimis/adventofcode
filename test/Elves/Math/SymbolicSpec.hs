@@ -8,11 +8,14 @@ import Test.QuickCheck
 import qualified Data.HashSet as S
 
 import Elves.Math.Symbolic
+import Elves.Math.Expression
+import Elves.Math.Simplify
+import Elves.Math.Differentiation
 
 spec = describe "Elves.Math.Symbolic" $ do
   let x = Var "x"
       y = var "y"
-      dxx = dx "x"
+      dxx = fullSimplify . dx "x"
   describe "(3 * (3x^2 - 5))^2 * 6x" $ do
     let e = (3 * ((squareOf (3 * x) - 5) `raisedTo` 2)) * (6 * x)
     it "simplifies correctly" $ do
@@ -83,6 +86,10 @@ spec = describe "Elves.Math.Symbolic" $ do
       dxx (2 * sin x) `shouldBe` (2 * cos x)
     it "handles sin(x^2) (composition)" $ do
       dxx (sin $ squareOf x) `shouldBe` (cos (squareOf x) * (2 * x))
+    it "handles exponents of constants" $ do
+      dxx (2 ** (3 * x + y)) `shouldBe` ((3 * log 2) * (2 ** (3 * x + y)))
+    it "handles exponents of fixed variables" $ do
+      dxx (y ** (x * 2)) `shouldBe` ((2 * (y ** (2 * x))) * log y)
 
   describe "df/dx (3x^2 - 5)^3" $ do
     let e = (3 * squareOf x - 5) ** 3
