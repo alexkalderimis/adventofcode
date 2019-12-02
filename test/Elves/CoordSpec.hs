@@ -1,5 +1,10 @@
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE UndecidableInstances #-}
+
 module Elves.CoordSpec (spec) where
 
+import           System.Random
 import           Control.Lens    hiding (contains, elements, index)
 import qualified Data.Ix         as Ix
 import qualified Data.List       as L
@@ -23,21 +28,22 @@ newtype Cube a = Cube (a,a) deriving Show
 
 data CubeWithPoint a = CWP (Cube a) a deriving Show
 
-instance (Coord a, Ix.Ix a, Arbitrary a) => Arbitrary (CubeWithPoint a) where
+instance (Coord a, Random (Dimension a), Ord (Dimension a), Arbitrary (Dimension a), Arbitrary a)
+  => Arbitrary (CubeWithPoint a) where
   arbitrary = do
     (Cube (lb,ub)) <- arbitrary
     components <- sequence [choose (lb ^. d, ub ^. d) | Lens d <- dimensions]
     let p = L.foldl' (\a (Lens d, v) -> set d v a) lb (zip dimensions components)
     return (CWP (Cube (lb,ub)) p)
 
-instance (Coord a, Arbitrary a) => Arbitrary (Cube a) where
+instance (Coord a, Ord (Dimension a), Arbitrary a, Arbitrary (Dimension a)) => Arbitrary (Cube a) where
   arbitrary = do
     lb  <- arbitrary
     ubs <- sequence [arbitrary `suchThat` (>= x) | Lens d <- dimensions, let x = lb ^. d]
     return (Cube (lb, L.foldl' (\c (Lens d, v) -> set d v c) origin (zip dimensions ubs)))
 
-isZero :: Coord i => i -> Bool
-isZero c = all ((0 ==) . (c ^.) . runLens) dimensions
+isZero :: (Eq a, Coord a) => a -> Bool
+isZero = (== origin)
 
 spec :: Spec
 spec = describe "Elves.Coord" $ do

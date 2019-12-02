@@ -29,7 +29,7 @@ import Control.Monad.State.Class
 import Control.Applicative as X
 import Control.Monad as X
 import Control.Monad.Reader
-import Data.List
+import Data.List as L
 import Data.Maybe
 import Data.Monoid
 import Data.Ord
@@ -157,3 +157,4 @@ on2 f da eb d e = f (da d) (eb e)
 -- eg: flooring addition => atLeast 0 . (+)
 (.*) :: (c -> d) -> (a -> b -> c) -> a -> b -> d
 (f .* g) a b = f (g a b)
+

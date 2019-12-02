@@ -1,4 +1,5 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE FlexibleContexts #-}
 
 module Elves.RTreeSpec (spec) where
 
@@ -22,7 +23,7 @@ import           Test.QuickCheck          hiding (within)
 import qualified Test.QuickCheck          as QC
 
 import           Elves
-import           Elves.Coord
+import           Elves.Coord hiding (size, extent)
 import           Elves.LawsSpec
 import           Elves.RTree              hiding (null)
 import qualified Elves.RTree              as RT

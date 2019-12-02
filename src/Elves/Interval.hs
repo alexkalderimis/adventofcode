@@ -1,17 +1,18 @@
+{-# LANGUAGE FlexibleContexts     #-}
+{-# LANGUAGE UndecidableInstances #-}
+
 module Elves.Interval where
 
-import qualified Data.Ix as Ix
-import           Data.Ix (Ix)
 import           Control.Lens              hiding (contains)
+import           Data.Ix                   (Ix)
+import qualified Data.Ix                   as Ix
 import           Test.QuickCheck.Arbitrary (Arbitrary (arbitrary, shrink),
                                             arbitraryBoundedEnum)
 import           Test.QuickCheck.Gen       (suchThat)
 
-import Elves.Coord (Coord, dimensions, mindists)
+import           Elves.Coord               (Coord, Overlapping, Dimension, dimensions, mindists)
+import qualified Elves.Coord               as Coord
 
--- ideally it would be nice to avoid the Ix type so as to handle
--- non integral co-ordinates. That means replacing the functionality
--- of Ix in Coord
 data Interval a = Interval { low :: a, hi :: a } deriving Show
 
 inRange :: Ix a => Interval a -> a -> Bool
@@ -23,7 +24,7 @@ range (Interval lo hi) = Ix.range (lo,hi)
 size :: Ix a => Interval a -> Int
 size (Interval lo hi) = Ix.rangeSize (lo,hi)
 
-instance (Arbitrary i, Coord i) => Arbitrary (Interval i) where
+instance (Arbitrary i, Ord (Dimension i), Coord i) => Arbitrary (Interval i) where
   arbitrary = do
     lb <- arbitrary
     ub <- arbitrary `suchThat` allDimensionsAbove lb
@@ -37,6 +38,5 @@ point x = Interval x x
 contains :: Ix a => Interval a -> Interval a -> Bool
 contains (Interval a b) bigger = inRange bigger a && inRange bigger b
 
--- do a and b share any points?
-overlaps :: Coord a => Interval a -> Interval a -> Bool
-overlaps a b = all (== 0) (mindists (low a,hi a) (low b, hi b))
+overlaps :: (Overlapping a) => Interval a -> Interval a -> Bool
+overlaps (Interval a b) (Interval c d) = Coord.overlaps (a,b) (c,d)
