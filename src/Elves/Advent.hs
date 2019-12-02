@@ -21,7 +21,7 @@ staticDay n pt1 pt2 spec = do
     ["pt1"]  -> pt1
     ["pt2"]  -> pt2
     ("test":test_args) -> withArgs test_args
-                          $ hspec (describe ("Day " ++ show n) spec)
+                          $ hspec (describe ("Day " <> show n) spec)
     _        -> die "bad arguments. Expected pt1,pt2 or test"
 
 day :: Int -> Parser a -> Part a -> Part a -> Spec -> IO ()
@@ -33,12 +33,12 @@ day n parser pt1 pt2 spec = do
 
 namedTime :: String -> IO () -> IO ()
 namedTime name act = do
-  when (not . null $ name) $ putStrLn name >> putStrLn (replicate (length name) '-')
+  unless (null name) $ putStrLn name >> putStrLn (replicate (length name) '-')
   start <- Clock.getCurrentTime
   act
   end <- Clock.getCurrentTime
   print (Clock.diffUTCTime end start)
-  when (not . null $ name) $ putStrLn (replicate (length name) '-')
+  unless (null name) $ putStrLn (replicate (length name) '-')
 
 time :: IO () -> IO ()
 time = namedTime ""
