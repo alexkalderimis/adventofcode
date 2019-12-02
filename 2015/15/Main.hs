@@ -2,27 +2,32 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RankNTypes        #-}
 
+import Prelude hiding (zipWith)
+
 import           Control.Applicative.Combinators
 import           Data.Attoparsec.Text            (decimal, signed)
 import qualified Data.Attoparsec.Text            as A
 import qualified Data.HashMap.Strict             as Map
 import qualified Data.List                       as L
+import qualified Data.Foldable as F
 import           Data.Maybe
 import           Data.Monoid
 import           Data.Ord
 import qualified Data.Set                        as S
 import           Data.Text                       (Text)
 import qualified Data.Text                       as T
-import           Data.Tree                       (Tree (..))
 import           Text.Parser.Char                (newline)
+import qualified Data.Vector as V
 
 import           Test.QuickCheck
 
 import           Elves
+import Elves.Collections
 import           Elves.Advent
-import           Elves.Geometry                  (Point)
+import           Elves.Geometry                  (planePoints)
 import           Elves.Math.Expression           (Expr, var)
 
+type Point a = [a]
 type Map = Map.HashMap
 
 type Constraint a = Point a -> Bool
@@ -65,25 +70,24 @@ type Recipe a = Map Text (Ingredient a)
 main :: IO ()
 main = day 15 parser pt1 pt2 test
   where
-    score = print . cookieScore . bakeCookie
+    score = print . cookieScore . bake
     pt1 = score . bestRecipe 100 []
     pt2 = score . bestRecipe 100 [Constrained calories 500]
 
 setQuantity :: Num a => Text -> a -> Recipe a -> Recipe a
 setQuantity k n = Map.adjust (useIngredient n) k
 
-bakeCookie :: Num a => Recipe a -> Ingredient a
-bakeCookie = foldMap id
+bake :: Num a => Recipe a -> Ingredient a
+bake = F.fold
 
 cookieScore :: (Ord a, Num a) => Ingredient a -> a
 cookieScore x = product $ fmap (atLeast 0 . ($ x))
                                [capacity, durability, flavor, texture]
 
 -- turn the ingredients into an objective function
-measure :: (Num a, Ord a) => [Ingredient a] -> [a] -> a
-measure is vs = cookieScore . mconcat $ appliedIs
-  where
-   appliedIs = zipWith useIngredient vs is
+measure :: (Num a, Ord a, Zips f, Foldable f)
+        => f (Ingredient a) -> f a -> a
+measure is vs = cookieScore . F.fold $ zipWith useIngredient vs is
 
 -- This is a genuinely fascinating problem, which admits both this solution, which
 -- relies for efficiency on generating the search plane efficiently, without
@@ -115,12 +119,13 @@ bestRecipe n cs r = Map.fromList [(name, useIngredient n i) | (n, (name, i)) <- 
     -- search the constrained plane
     vs = L.maximumBy (comparing obj)
        . filter test
-       $ planePoints n (L.genericLength is)
+       $ planePoints n (L.genericLength namedIs)
 
     obj = measure is
     test vs = all (predicate vs) cs
 
-    predicate vs (Constrained f goal) = goal == f (mconcat $ zipWith useIngredient vs is)
+    predicate vs (Constrained f goal)
+      = goal == f (F.fold $ zipWith useIngredient vs is)
 
 parser :: Parser (Recipe Int)
 parser = fmap Map.fromList (ingredient `sepBy1` newline)
@@ -135,36 +140,24 @@ parser = fmap Map.fromList (ingredient `sepBy1` newline)
                             <*> pure 0)
 
 
--- generate just the points in the plane, without even
--- considering any other irrelevant points.
-planePoints :: (Num a, Enum a) => a -> Word -> [Point a]
-planePoints total = untree . summingTree total
-  where
-    summingTree t 0 = []
-    summingTree t 1 = [Node t []]
-    summingTree t n = fmap (\x -> Node x $ summingTree (t - x) (n - 1)) [0 .. t]
-    untree [] = [[]]
-    untree ts = ts >>= \(Node x rst) -> fmap (x:) (untree rst)
-
 test = do
   let rec = parseOnly parser exampleInput
       optimum = 62842880
   describe "planePoints" $ do
     -- purposely small-ish inputs
-    let inputs :: Gen (Int, Word)
-        inputs      = choose (1, 50) <#> choose (1, 5)
-        smallInputs :: Gen (Int, Word)
+    let inputs      = choose (1, 50) <#> choose (1, 5)
         smallInputs = choose (1, 20) <#> choose (1, 4)
+        pp = planePoints :: Int -> Word -> [[Int]]
     let totalSpace t n = (t + 1) ^ fromIntegral n
     specify "all points sum to the given value" . property
-      . forAll inputs $ \(t,n) -> all ((== t) . sum) (planePoints t n)
+      . forAll inputs $ \(t,n) -> all ((== t) . sum) (pp t n)
     it "includes fewer points than the entire search space" . property
-      . forAll inputs $ \(t,n) -> length (planePoints t n) < totalSpace t n
+      . forAll inputs $ \(t,n) -> length (pp t n) < totalSpace t n
     -- because this test involves traversing the entire seach space, we use
     -- the smaller inputs for speed. Change to 'inputs' for a more
     -- thorough test
     it "includes all valid points" . property . forAll smallInputs $ \(t,n) ->
-        let ps = S.fromList $ planePoints t n
+        let ps = S.fromList $ pp t n
             xs = [ 0 .. t ]
             allPoints = foldr (<*>) (fmap pure xs)
                               (replicate (fromIntegral n - 1) (fmap (:) xs))
@@ -172,18 +165,18 @@ test = do
 
   describe "example" $ do
     it "calculates the correct total" $ do
-      let eg = cookieScore  . bakeCookie . setQuantity "Butterscotch" 44
+      let eg = cookieScore  . bake . setQuantity "Butterscotch" 44
                                          . setQuantity "Cinnamon" 56
       fmap eg rec `shouldBe` Right optimum
 
   describe "bestRecipe" $ do
     it "can find the optimum recipe" $ do
-      let bake = cookieScore . bakeCookie . bestRecipe 100 []
-      fmap bake rec `shouldBe` Right optimum
+      let f = cookieScore . bake . bestRecipe 100 []
+      fmap f rec `shouldBe` Right optimum
     it "can find the optimum calorie constrained recipe" $ do
-      let bake = cookieScore . bakeCookie
-                             . bestRecipe 100 [Constrained calories 500]
-      fmap bake rec `shouldBe` Right 57600000
+      let f = cookieScore . bake
+                          . bestRecipe 100 [Constrained calories 500]
+      fmap f rec `shouldBe` Right 57600000
     it "gets the calorie constrained recipe right" $ do
       let f = setQuantity "Butterscotch" 40 . setQuantity "Cinnamon" 60
       fmap (bestRecipe 100 [Constrained calories 500]) rec `shouldBe` fmap f rec
