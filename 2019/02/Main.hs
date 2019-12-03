@@ -1,50 +1,60 @@
+{-# LANGUAGE FlexibleContexts  #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE RankNTypes        #-}
 
 import           Control.Applicative.Combinators
 import           Control.Monad
 import           Control.Monad.ST
-import           Data.Attoparsec.Text            (decimal, char)
+import           Data.Array                      (Ix)
+import           Data.Array.MArray               (readArray, writeArray)
+import qualified Data.Array.MArray               as MA
+import           Data.Array.ST                   (STUArray, runSTUArray)
+import           Data.Array.Unboxed              (UArray)
+import qualified Data.Array.Unboxed              as A
+import           Data.Attoparsec.Text            (char, decimal)
+import           Data.Word
 import           Elves
-import Data.Word
 import           Elves.Advent
+import           Test.QuickCheck                 (property)
 import           Text.Parser.Char                (newline)
-import           Data.Array.ST           (STUArray, runSTUArray)
-import           Data.Array.Unboxed      (UArray)
-import qualified Data.Array.Unboxed      as A
-import           Data.Array              (Ix)
-import           Data.Array.MArray       (readArray, writeArray)
-import qualified Data.Array.MArray       as MA
-import Test.QuickCheck (property)
 
-type Position = Word8
+type Addr = Word8
 type Value = Int
-type Program = UArray Position Value
-type Heap s = STUArray s Position Value
+type Program = UArray Addr Value
+type Heap s = STUArray s Addr Value
 
 data Instruction = Exit
-                 | Add Position Position Position Position
-                 | Mul Position Position Position Position
+                 | Add Addr Addr Addr Addr
+                 | Mul Addr Addr Addr Addr
                  deriving (Show, Eq)
 
 main :: IO ()
 main = day 1 parse pt1 pt2 test
   where
-    pt1 = print . (A.! 0) . fixProgram
-    pt2 _ = print ()
     parse = fmap readProgram (decimal `sepBy1` char ',')
+    pt1 = print . value0 . fixProgram 12 2
+    pt2 prog = do -- dumb brute force search
+      let pairs = (,) <$> [0 .. 100] <*> [0 .. 100]
+          target = 19690720
+      case filter (\(x,y) -> target == value0 (fixProgram x y prog)) pairs of
+          [] -> putStrLn "No answer found"
+          ((x,y) : _) -> let r = (100 * x) + y
+                          in putStrLn $ mconcat ["100 * ", show x, " + ", show y
+                                                , " = ", show r]
 
-fixProgram :: Program -> Program
-fixProgram p = runST (calculate $ restoreTo1202 p)
-    where restoreTo1202 = (A.// [(1, 12), (2, 2)])
+value0 :: Program -> Value
+value0 = (A.! 0)
+
+fixProgram :: Value -> Value -> Program -> Program
+fixProgram a b p = runST (calculate $ restoreTo1202 p)
+    where restoreTo1202 = (A.// [(1, a), (2, b)])
 
 calculate :: Program -> ST s Program
 calculate prog = do
   heap <- MA.thaw prog
   init <- nextInstruction 0 heap
   let go minstr = case minstr of
-                    Nothing -> MA.freeze heap
+                    Nothing    -> MA.freeze heap
                     Just instr -> applyInstruction instr heap >>= go
   go init
 
@@ -53,7 +63,7 @@ readProgram vals = A.listArray (0, fromIntegral (length vals) - 1) vals
 
 applyInstruction :: Instruction -> Heap s -> ST s (Maybe Instruction)
 applyInstruction instr h = case instr of
-  Exit -> pure Nothing
+  Exit          -> pure Nothing
   (Add a b r k) -> go (+) a b r k
   (Mul a b r k) -> go (*) a b r k
   where
@@ -66,7 +76,7 @@ applyInstruction instr h = case instr of
         Just res -> do MA.writeArray h r res
                        nextInstruction k h
 
-nextInstruction :: Position -> Heap s -> ST s (Maybe Instruction)
+nextInstruction :: Addr -> Heap s -> ST s (Maybe Instruction)
 nextInstruction index heap = do
   bs <- MA.getBounds heap
   code <- get bs index
@@ -82,7 +92,7 @@ nextInstruction index heap = do
                           <*> (fmap fromIntegral <$> get bs (index + 3))
                           <*> pure (pure $ index + 4)
 
-tryRead :: Heap s -> (Position, Position) -> Position -> ST s (Maybe Value)
+tryRead :: Heap s -> (Addr, Addr) -> Addr -> ST s (Maybe Value)
 tryRead heap bs i = if MA.inRange bs i
                     then Just <$> readArray heap i
                     else pure Nothing
@@ -108,7 +118,7 @@ test = do
                               applyInstruction Exit heap
                               MA.freeze heap
        in result == prog
-      
+
   describe "nextInstruction" $ do
     let examples = [ (0, [1,0,0,0,99], Just (Add 0 0 0 4))
                    , (4, [1,0,0,0,99], Just Exit)
