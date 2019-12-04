@@ -1,0 +1,3 @@
+--command="stack ghci adventofcode:lib adventofcode:test:adventofcode-test"
+--max-messages=5
+--color=always
