@@ -1,6 +1,7 @@
-{-# LANGUAGE FlexibleContexts  #-}
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE RankNTypes        #-}
+{-# LANGUAGE FlexibleContexts   #-}
+{-# LANGUAGE NumericUnderscores #-}
+{-# LANGUAGE OverloadedStrings  #-}
+{-# LANGUAGE RankNTypes         #-}
 
 import           Control.Applicative.Combinators
 import           Control.Monad
@@ -12,11 +13,20 @@ import           Data.Array.ST                   (STUArray, runSTUArray)
 import           Data.Array.Unboxed              (UArray)
 import qualified Data.Array.Unboxed              as A
 import           Data.Attoparsec.Text            (char, decimal)
+import           Data.List                       (minimumBy)
+import           Data.Maybe
+import           Data.Ord                        (comparing)
 import           Data.Word
 import           Elves
 import           Elves.Advent
+import           Elves.Coord                     (Accessor, dimensions,
+                                                  getDimension, midpoint,
+                                                  origin, scale, setDimension,
+                                                  translate)
 import           Test.QuickCheck                 (property)
 import           Text.Parser.Char                (newline)
+
+import           Debug.Trace                     (traceShow)
 
 type Addr = Word8
 type Value = Int
@@ -33,14 +43,39 @@ main = day 1 parse pt1 pt2 test
   where
     parse = fmap readProgram (decimal `sepBy1` char ',')
     pt1 = print . value0 . fixProgram 12 2
-    pt2 prog = do -- dumb brute force search
-      let pairs = (,) <$> [0 .. 100] <*> [0 .. 100]
-          target = 19690720
-      case filter (\(x,y) -> target == value0 (fixProgram x y prog)) pairs of
-          [] -> putStrLn "No answer found"
-          ((x,y) : _) -> let r = (100 * x) + y
-                          in putStrLn $ mconcat ["100 * ", show x, " + ", show y
-                                                , " = ", show r]
+    pt2 prog = do
+      let target = 19_690_720
+      namedTime "brute-force" $ do
+        let pairs = (,) <$> [0 .. 100] <*> [0 .. 100]
+        case listToMaybe (filter (\(x,y) -> target == value0 (fixProgram x y prog)) pairs) of
+            Nothing    -> putStrLn "No answer found"
+            Just (x,y) -> let r = (100 * x) + y
+                           in putStrLn $ mconcat ["100 * ", show x, " + ", show y
+                                                 , " = ", show r]
+      namedTime "snail-trail" $ do
+        case snailTrail target prog of
+          Nothing    -> putStrLn "No answer found"
+          Just (x,y) -> let r = (100 * x) + y
+                         in putStrLn $ mconcat ["100 * ", show x, " + ", show y
+                                               , " = ", show r]
+
+-- we use the fact that for both addition and multiplication (our only operations) the values
+-- must be increasing for increasing inputs. 
+snailTrail :: Value -> Program -> Maybe (Value, Value)
+snailTrail target prog = go mempty origin
+  where
+    distance p = abs (testVals p - target)
+    testVals (x,y) = value0 $ fixProgram x y prog
+    go visited point
+       | testVals point == target = Just point
+       | otherwise                = let points = [p | dx <- [0,1] , dy <- [0,1]
+                                                    , let p = translate (dx,dy) point
+                                                    , p `notElem` visited
+                                                    ]
+                                        bestPoint = fst $ minimumBy (comparing snd) (zip points (distance <$> points))
+                                     in if bestPoint == point
+                                        then Nothing
+                                        else go points bestPoint
 
 value0 :: Program -> Value
 value0 = (A.! 0)
