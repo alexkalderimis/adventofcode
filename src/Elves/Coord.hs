@@ -185,3 +185,9 @@ mindists (l0,h0) (l1,h1) = do
 size :: (Coord a, Extent (Dimension a)) => a -> a -> Dimension a
 size a b
   = product [extent (a ^. fld) (b ^. fld) | Lens fld <- dimensions]
+
+setDimension :: Coord a => Accessor a (Dimension a) -> Dimension a -> a -> a
+setDimension dim = set (runLens dim)
+
+getDimension :: Coord a => Accessor a (Dimension a) -> a -> Dimension a
+getDimension dim = view (runLens dim)
