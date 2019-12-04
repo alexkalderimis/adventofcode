@@ -15,9 +15,14 @@ main = do
   case args of
     (year : day : rst) -> do
       let exe = year <> "/" <> day <> "/Main"
-      (exitCode, out, err) <- readProcess $ proc "make" [exe]
+          input = year <> "/" <> day <> "/input"
+      (exitCode, out, err) <- readProcess (proc "make" [exe])
       case exitCode of
-        ExitSuccess -> runProcess (proc exe rst) >>= exitWith
+        ExitSuccess -> do
+          f <- case rst of
+            ["test"] -> pure id
+            _        -> setStdin . useHandleClose <$> openFile input ReadMode
+          runProcess (f $ proc exe rst) >>= exitWith
         _ -> BS.hPut stderr err >> exitWith exitCode 
     _ -> die "At least two arguments expected"
 
