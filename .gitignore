@@ -6,3 +6,4 @@ adventofcode.cabal
 *~
 *.dyn_hi
 *.dyn_o
+.last-lib-build
