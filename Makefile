@@ -1,11 +1,11 @@
-YEARS = 2015 2017 2018 2019
+YEARS = 2015/ 2017/ 2018/ 2019/ 2020/
 
 SOURCES := $(shell find $(YEARS) -depth 2 -type f -name 'Main.hs')
 FILES := $(SOURCES:.hs=)
 
-SRC_FILES := $(shell find src -name '.*.hs')
+SRC_FILES := $(shell find src -name '*.hs')
 
-adventofcode.cabal: package.yaml stack.yaml
+adventofcode.cabal: package.yaml stack.yaml .last-lib-build
 	stack build
 
 %/Main: %/Main.hs adventofcode.cabal .last-lib-build
