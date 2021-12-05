@@ -46,11 +46,15 @@ library:
     - attoparsec
     - bytestring
     - lens
+    - parser-combinators
+    - extra
+    - safe
 
 executables:
   adventofcode-exe:
     main:                Main.hs
-    source-dirs:         app
+    source-dirs:
+      - app
     ghc-options:
     - -threaded
     - -rtsopts
