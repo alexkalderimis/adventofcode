@@ -1,43 +1,44 @@
-{-# LANGUAGE TupleSections #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TupleSections     #-}
 
 import qualified Data.Array           as A
 import qualified Data.Attoparsec.Text as A
 import           Data.Foldable        (foldl')
 import           Data.Function        (on, (&))
 import qualified Data.List            as L
+import           Data.Map.Strict      (Map)
+import qualified Data.Map.Strict      as Map
 import           Data.Maybe
 import           Data.Ord             (comparing)
-import qualified Data.Map.Strict      as Map
-import qualified Data.Set as Set
-import Data.Map.Strict (Map)
+import qualified Data.Set             as Set
 import           Data.Text            (Text)
 import qualified Data.Text            as T
 import           Text.Parser.Char     (char, newline)
 
 import           Elves
 import           Elves.Advent
-import           Elves.Coord          (Heuristic (..), origin)
+import           Elves.Coord          (manhattan, origin)
 import qualified Elves.Coord          as Coord
 
-data Direction = H | V
-  deriving (Show, Eq)
+data Direction = H | V deriving (Show, Eq)
 
 type Command = (Direction, Int)
 
 type Pos = (Int, Int)
 type Path = Map Pos Int
 
+data T3 a b c = T3 { t0 :: !a, t1 :: !b, t3 :: !c } deriving (Show, Eq)
+
 main :: IO ()
 main = day 03 parser pt1 pt2 test
   where
     parser = (,) <$> (parseDirection <* newline) <*> parseDirection
     pt1 (a, b) = case fst <$> closestCrossing (buildPath a) (buildPath b) of
-                   Nothing    -> putStrLn "Lines do not cross"
-                   Just dist  -> print dist
+                   Nothing   -> putStrLn "Lines do not cross"
+                   Just dist -> print dist
     pt2 (a, b) = case fst <$> crossingBySignalDelay (buildPath a) (buildPath b) of
                    Nothing    -> putStrLn "Lines do not cross"
-                   Just delay  -> print delay
+                   Just delay -> print delay
 
 parseDirection :: Parser [Command]
 parseDirection = direction `A.sepBy1` char ','
@@ -49,16 +50,19 @@ parseDirection = direction `A.sepBy1` char ','
                 fmap (V,) (pos 'U' <|> neg 'D')
 
 buildPath :: [Command] -> Path
-buildPath = snd . foldl' f ((0, origin), mempty)
+buildPath = t3 . foldl' f (T3 0 origin mempty)
   where
-    f ((steps, loc), s) cmd = let newLoc = move loc cmd
-                                  s' = visited loc newLoc
-                                  steps' = steps + abs (snd cmd)
-                               in ((steps', newLoc), Map.unionWith const s (Map.map (+ steps) s'))
+    f (T3 steps loc s) cmd = let newLoc = move loc cmd
+                                 s' = Map.unionWith const s $ visited steps loc newLoc
+                                 steps' = steps + length cmd
+                              in T3 steps' newLoc s'
     move (x,y) (H, n) = (x + n, y)
     move (x,y) (V, n) = (x, y + n)
-    next a b = if b > a then a + 1 else a - 1
-    visited (x,y) (x', y') = Map.fromList $ zip [(a,b) | a <- [x, next x x' .. x'], b <- [y, next y y' .. y']] [0 ..]
+    next a b          = if b > a then a + 1 else a - 1
+    fromTo a b        = [a, next a b .. b]
+    visited start (x,y) (x', y') = Map.fromList $ zip [(a,b) | a <- fromTo x x', b <- fromTo y y'] [start ..]
+    length (_, n) = abs n
+
 
 bestCrossing :: Ord a => (Pos -> a) -> Path -> Path -> Maybe (a, (Int, Int))
 bestCrossing f a b = Set.intersection (Map.keysSet a) (Map.keysSet b)
@@ -68,8 +72,8 @@ bestCrossing f a b = Set.intersection (Map.keysSet a) (Map.keysSet b)
                    & L.uncons
                    & fmap (L.minimumBy (comparing fst) . uncurry (:))
 
-closestCrossing :: Path -> Path -> Maybe (Double, (Int, Int))
-closestCrossing = bestCrossing (Coord.measure Manhattan origin)
+closestCrossing :: Path -> Path -> Maybe (Int, (Int, Int))
+closestCrossing = bestCrossing (manhattan origin)
 
 crossingBySignalDelay :: Path -> Path -> Maybe (Int, (Int, Int))
 crossingBySignalDelay a b = bestCrossing (\pos -> sum [s Map.! pos | s <- [a, b]]) a b
