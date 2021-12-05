@@ -155,40 +155,42 @@ spec = describe "Elves.Coord" $ do
          in measure h p cp <= measure h p p'
 
   describe "mindist" $ do
+    let shouldBeDbl a b = abs (a - b) `shouldSatisfy` (< (0.000001 :: Double))
     specify "mindist (0,0,7) ((-1,-4,-12),(-1,4,-12)) == 19.02.." $ do
-      let p = (0,0,7)
+      let p = (0,0,7) :: (Int, Int, Int)
           b = ((-1,-4,-12),(-1,4,-12))
           x = (-1,0,-12)
-       in mindist p b `shouldBe` straightLine p x
+       in mindist p b `shouldBeDbl` straightLine p x
 
-    let box = ((3,4), (6,10))
+    let box = ((3,4), (6,10)) :: ((Int, Int), (Int, Int))
+        zero = 0 :: Double
     specify "the mindist is always >= 0" $ property $ \p (Cube b) ->
-        mindist (p :: Point) b >= 0
+        mindist (p :: Point) b >= zero
     describe "for points contained in the search box" $ do
       describe "the mindist to (5,5)" $ do
         let this = mindist (5,5) box
-        it "is zero" $ this `shouldBe` 0
+        it "is zero" $ this `shouldBeDbl` zero
       describe "the mindist to (6,9)" $ do
         let this = mindist (6,9) box
-        it "is zero" $ this `shouldBe` 0
+        it "is zero" $ this `shouldBeDbl` 0
       specify "the mindist == 0 iff within" $ property $ \p (Cube b) ->
-        let implies = if mindist (p :: Point) b == 0 then id else not
+        let implies = if mindist (p :: Point) b == zero then id else not
          in implies $ within (p,p) b
     describe "points that differ only on one dimension" $ do
       describe "the mindist to (4,0)" $ do
         let this = mindist (4,20) box
-        it "is ten" $ this `shouldBe` 10
+        it "is ten" $ this `shouldBeDbl` 10
       describe "the mindist to (4,13)" $ do
         let this = mindist (4,13) box
-        it "is three" $ this `shouldBe` 3
+        it "is three" $ this `shouldBeDbl` 3
       specify "the mindist to (-1,5) is four" $ do
-        mindist (-1,5) box `shouldBe` 4
+        mindist (-1,5) box `shouldBeDbl` 4
       specify "the mindist to (12, 7) is six" $ do
-        mindist (12,7) box `shouldBe` 6
+        mindist (12,7) box `shouldBeDbl` 6
     describe "points that differ in two or more dimensions" $ do
       specify "the mindist to (0,2) is five" $ do
-        mindist (0,0) box `shouldBe` 5 -- using 3,4,5
+        mindist (0,0) box `shouldBeDbl` 5 -- using 3,4,5
       specify "the mindist to (11,-8) is thirteen" $ do
-        mindist (11,-8) box `shouldBe` 13 -- using 5,12,13
+        mindist (11,-8) box `shouldBeDbl` 13 -- using 5,12,13
       specify "the mindist to (25,20) is 29" $ do
-        mindist (-18,30) box `shouldBe` 29 -- using 20,21,29
+        mindist (-18,30) box `shouldBeDbl` 29 -- using 20,21,29
