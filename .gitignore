@@ -8,3 +8,4 @@ adventofcode.cabal
 *.dyn_o
 .last-lib-build
 dist-newstyle
+.ghc.environment.*
