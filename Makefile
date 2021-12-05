@@ -1,4 +1,4 @@
-YEARS = 2015/ 2017/ 2018/ 2019/ 2020/
+YEARS = 2015/ 2017/ 2018/ 2019/ 2020/ 2021/
 
 SOURCES := $(shell find $(YEARS) -depth 2 -type f -name 'Main.hs')
 FILES := $(SOURCES:.hs=)
