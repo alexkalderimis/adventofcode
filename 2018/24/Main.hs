@@ -172,22 +172,22 @@ boost b = immuneSystem %~ M.map (groupAttack.power +~ b)
 -- the smaller span, and we only use 90% of the lower-bound to help.
 minimalBoost :: Input -> Damage
 minimalBoost inp = fromMaybe (error "no sufficient boost")
-                 $ listToMaybe
-                 $ filter ((ImmuneSystem ==) . victor)
+                 . listToMaybe
+                 . filter ((ImmuneSystem ==) . victor)
                  $ [lb - (lb `div` 9) .. ub]
     where
       lb = let pred = (Infection ==) . victor
             in maximalBinarySearch pred (0, ub)
       ub = let pred = (ImmuneSystem ==) . victor
             in minimalBinarySearch pred (0, 2 * oneShot)
-      oneShot = maximum $ fmap ((*) <$> view groupHP <*> view groupSize)
-                        $ M.elems
+      oneShot = maximum . fmap ((*) <$> view groupHP <*> view groupSize)
+                        . M.elems
                         $ inp ^. infection
       victor b = evalState battle (boost b inp)
 
 selectTargets :: State Input [Attack]
 selectTargets = fmap (fmap snd . L.sortBy attackOrder . catMaybes) $ do
-  getAttackers >>= locally . mapM (\(side, (gid, g)) -> do
+  getAttackers >>= Elves.locally . mapM (\(side, (gid, g)) -> do
     mt <- selectTarget side g
     return $ fmap ((,) (g ^. groupInitiative) . Attack side gid) mt)
   where
