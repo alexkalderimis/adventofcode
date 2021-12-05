@@ -1,0 +1,18 @@
+# cradle:
+  # multi:
+    # - path: 'Setup.hs'
+      # config:
+        # cradle: none
+    # - path: './'
+      # config:
+cradle:
+  stack: 
+    - path: './src'
+      component: "adventofcode:lib"
+    - path: './test'
+      component: "adventofcode:test:adventofcode-test"
+    - path: './benchmarks'
+      component: "adventofcode:benchmarks:aoc-benchmarks"
+
+dependencies:
+  - package.yaml
