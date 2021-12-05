@@ -29,3 +29,6 @@ countOf k = getSum . fromMaybe mempty . M.lookup k . countMap
 
 fromList :: Ord a => [a] -> CountMap a
 fromList = CountMap . M.fromListWith (<>) . flip zip (repeat 1)
+
+counting :: (Word -> Bool) -> CountMap a -> [a]
+counting f = fmap fst . filter (f . getSum . snd) . M.toList . countMap
