@@ -1,11 +1,12 @@
-{-# LANGUAGE FlexibleContexts   #-}
-{-# LANGUAGE TupleSections   #-}
-{-# LANGUAGE RecordWildCards   #-}
-{-# LANGUAGE NumericUnderscores #-}
-{-# LANGUAGE OverloadedStrings  #-}
-{-# LANGUAGE RankNTypes         #-}
-{-# LANGUAGE StandaloneDeriving         #-}
-{-# LANGUAGE UndecidableInstances        #-}
+{-# LANGUAGE TemplateHaskell     #-}
+{-# LANGUAGE FlexibleContexts     #-}
+{-# LANGUAGE NumericUnderscores   #-}
+{-# LANGUAGE OverloadedStrings    #-}
+{-# LANGUAGE RankNTypes           #-}
+{-# LANGUAGE RecordWildCards      #-}
+{-# LANGUAGE StandaloneDeriving   #-}
+{-# LANGUAGE TupleSections        #-}
+{-# LANGUAGE UndecidableInstances #-}
 
 import           Control.Applicative.Combinators
 import           Control.Monad
@@ -16,14 +17,16 @@ import qualified Data.Array.MArray               as MA
 import           Data.Array.ST                   (STUArray, runSTUArray)
 import           Data.Array.Unboxed              (UArray)
 import qualified Data.Array.Unboxed              as A
-import           Data.Attoparsec.Text            (char, decimal)
-import Data.Functor.Identity
+import           Data.Attoparsec.Text            (char, decimal, signed)
+import           Data.Functor.Identity
 import           Data.List                       (minimumBy)
 import           Data.Maybe
 import           Data.Ord                        (comparing)
 import           Data.Word
 import           Elves
 import           Elves.Advent
+import Data.Function ((&))
+import Control.Lens (view, makeLenses, (^.), (.~), (%~))
 import           Elves.Coord                     (Accessor, dimensions,
                                                   getDimension, midpoint,
                                                   origin, scale, setDimension,
@@ -42,85 +45,93 @@ data Parameter = Position Addr | Immediate Value
                  deriving (Show, Eq)
 
 data Instruction = Exit
-                 | Add Parameter Parameter Addr Addr
-                 | Mul Parameter Parameter Addr Addr
-                 | Input Addr Addr
-                 | Output Parameter Addr
+                 | Add Parameter Parameter Addr
+                 | Mul Parameter Parameter Addr
+                 | Input Addr
+                 | Output Parameter
                  deriving (Show, Eq)
+
+data ExecutionState i h = ExecutionState
+  { _esKont   :: i
+  , _esInput  :: Stream
+  , _esOutput :: Stream
+  , _esHeap   :: h
+  } deriving (Show, Eq)
+
+makeLenses ''ExecutionState
+
+initialState :: ExecutionState Addr ()
+initialState = ExecutionState 0 [] [] ()
+
+type Offset = Addr -> Addr
+
+offset :: Instruction -> Addr -> Addr
+offset Exit = id
+offset (Input _) = (+ 2)
+offset (Output _) = (+ 2)
+offset (Add _ _ _) = (+ 4)
+offset (Mul _ _ _) = (+ 4)
 
 main :: IO ()
 main = day 5 parse pt1 pt2 test
   where
-    parse = fmap readProgram (decimal `sepBy1` char ',')
+    parse = fmap readProgram (signed decimal `sepBy1` char ',')
     pt1 = const (print ())
     pt2 = const (print ())
 
 value0 :: Program -> Value
 value0 = (A.! 0)
 
-calculate :: Stream -> Program -> ST s (ExecutionState Maybe Program)
+calculate :: Stream -> Program -> ST s (Either String (ExecutionState Addr Program))
 calculate input prog = do
   heap <- MA.thaw prog
-  init <- nextInstruction 0 heap
-  let go s  = case esKont s of
-                    Nothing   -> do h <- MA.freeze heap
-                                    pure s { esHeap = h }
-                    Just inst -> applyInstruction s { esKont = Identity inst } >>= go
-  go (newState heap input init)
+  let exit i s = do h <- MA.freeze heap
+                    let s' = s & esKont .~ i & esHeap .~ h
+                    pure (pure s')
+  let go addr ms  = case ms of
+                      Left err -> pure (Left err)
+                      Right s -> do let addr' = addr & s^.esKont
+                                    mi <- nextInstruction addr' heap
+                                    case mi of
+                                      Nothing -> pure . Left $ "No instruction at " <> show addr'
+                                      Just Exit -> exit addr' s 
+                                      Just i -> applyInstruction (s & esKont .~ i) >>= go addr'
+
+  go 0 . pure $ initialState & esInput .~ input
+                             & esHeap .~ heap
+                             & esKont .~ id
 
 readProgram :: [Value] -> Program
 readProgram vals = A.listArray (0, fromIntegral (length vals) - 1) vals
 
-data ExecutionState f h = ExecutionState
-  { esKont :: f Instruction
-  , esInput :: Stream
-  , esOutput :: Stream
-  , esErr :: [String]
-  , esHeap :: h
-  }
-
-deriving instance (Show (f Instruction), Show h) => Show (ExecutionState f h)
-deriving instance (Eq (f Instruction), Eq h) => Eq (ExecutionState f h)
-
-newState :: h -> Stream -> f Instruction -> ExecutionState f h
-newState h input i = ExecutionState { esKont = i
-                                       , esInput = input
-                                       , esOutput = mempty
-                                       , esErr = mempty
-                                       , esHeap = h
-                                       }
-
-applyInstruction :: ExecutionState Identity (Heap s) -> ST s (ExecutionState Maybe (Heap s))
-applyInstruction state@ExecutionState{..} = case runIdentity esKont of
-  Exit          -> pure state { esKont = Nothing }
-  (Add a b r k) -> go (+) a b r k
-  (Mul a b r k) -> go (*) a b r k
-  (Output p k)  -> do bs <- MA.getBounds esHeap
-                      mx <- resolve bs p
-                      case mx of
-                        Nothing -> pure referenceError
-                        Just v  -> do i <- nextInstruction k esHeap
-                                      pure state { esKont = i, esOutput = v : esOutput }
-  (Input a k)   -> case esInput of
-                      [] -> pure state { esKont = Nothing
-                                       , esErr = "Unexpected End of Input" : esErr
-                                       }
-                      (x:xs) -> do MA.writeArray esHeap a x
-                                   kont <- nextInstruction k esHeap
-                                   pure state { esKont = kont, esInput = xs }
+applyInstruction :: ExecutionState Instruction (Heap s) -> ST s (Either String (ExecutionState Offset (Heap s)))
+applyInstruction state = advance <$> case instruction of
+  Exit      -> pure $ pure state
+  Add a b r -> op (+) a b r
+  Mul a b r -> op (*) a b r
+  Output p  -> do
+    bs <- MA.getBounds (state^.esHeap)
+    mx <- resolve bs p
+    case mx of
+      Nothing -> boom "Reference error"
+      Just v  -> pure . pure $ state & esOutput %~ (v :)
+  Input a   -> case state^.esInput of
+    [] -> boom "Unexpected end of input"
+    (x:xs) -> do MA.writeArray (state^.esHeap) a x
+                 pure . pure $ state & esInput .~ xs
   where
+    advance = fmap (esKont .~ offset instruction)
+    instruction = state ^. esKont
     resolve _ (Immediate v)    = pure (pure v)
-    resolve bs (Position addr) = tryRead esHeap bs addr
-    referenceError = state { esKont = Nothing, esErr = "Reference error" : esErr }
-    go f a b r k = do
-      bs <- MA.getBounds esHeap
+    resolve bs (Position addr) = tryRead (state^.esHeap) bs addr
+    boom = pure . Left
+    op f a b r = do
+      bs <- MA.getBounds (state^.esHeap)
       mx <- resolve bs a
       my <- resolve bs b
       case liftA2 f mx my of
-        Nothing -> pure referenceError
-        Just res -> do MA.writeArray esHeap r res
-                       kont <- nextInstruction k esHeap
-                       pure state { esKont = kont }
+        Nothing -> boom "Reference error"
+        Just res -> pure state <$ MA.writeArray (state^.esHeap) r res
 
 nextInstruction :: Addr -> Heap s -> ST s (Maybe Instruction)
 nextInstruction index heap = do
@@ -130,18 +141,15 @@ nextInstruction index heap = do
     Just (0, 99) -> pure (Just Exit)
     Just (ms,  1) -> instr2 (modes ms) bs Add
     Just (ms,  2) -> instr2 (modes ms) bs Mul
-    Just (_,  3) -> liftM2 Input <$> (fmap fromIntegral <$> get bs (index + 1))
-                                 <*> pure (pure $ index + 2)
+    Just (_,  3) -> fmap Input <$> (fmap fromIntegral <$> get bs (index + 1))
     Just (ms,  4) -> let m = head (modes ms)
-                      in liftM2 Output <$> (fmap m <$> get bs (index + 1))
-                                       <*> pure (pure $ index + 2)
+                      in fmap Output <$> (fmap m <$> get bs (index + 1))
     _            -> pure Nothing
   where
     get = tryRead heap
-    instr2 (ma:mb:_) bs f = liftM4 f <$> (fmap ma <$> get bs (index + 1))
+    instr2 (ma:mb:_) bs f = liftM3 f <$> (fmap ma <$> get bs (index + 1))
                                      <*> (fmap mb <$> get bs (index + 2))
                                      <*> (fmap fromIntegral <$> get bs (index + 3))
-                                     <*> pure (pure $ index + 4)
     modes n = let (m, code) = quotRem n 10
                   mode = case code of
                             0 -> Position . fromIntegral
@@ -156,63 +164,64 @@ tryRead heap bs i = if MA.inRange bs i
 
 test = do
   describe "applyInstruction" $ do
+    let newState h inp i = initialState & esHeap .~ h & esInput .~ inp & esKont .~ i
     let examples =
-         [ ([1,0,0,0,99], Add (Position 0) (Position 0) 0 4, [2,0,0,0,99])
+         [ ([1,0,0,0,99], Add (Position 0) (Position 0) 0, [2,0,0,0,99])
          , ([1,0,0,0,99], Exit, [1,0,0,0,99])
-         , ([2,3,0,3,99], Mul (Position 3) (Position 0) 3 4, [2,3,0,6,99])
-         , ([2,3,0,3,99], Input 1 4, [2,10000,0,3,99])
-         , ([1,9,10,3,2,3,11,0,99,30,40,50], Mul (Position 3) (Position 11) 0 8, [150,9,10,3,2,3,11,0,99,30,40,50])
+         , ([2,3,0,3,99], Mul (Position 3) (Position 0) 3, [2,3,0,6,99])
+         , ([2,3,0,3,99], Input 1, [2,10000,0,3,99])
+         , ([1,9,10,3,2,3,11,0,99,30,40,50], Mul (Position 3) (Position 11) 0, [150,9,10,3,2,3,11,0,99,30,40,50])
          ]
     forM_ examples $ \(state, command, expected) -> do
       it ("gets the right result for: applyInstruction " <> show command <> " " <> show state) $ do
         let prog = readProgram state
             result = runST $ do heap <- MA.thaw prog
-                                applyInstruction (newState heap [10000 ..] (Identity command))
+                                applyInstruction (newState heap [10000 ..] command)
                                 MA.freeze heap
         result `shouldBe` readProgram expected
     it "always leaves a program untouched when we exit" . property $ \ints ->
       let prog = readProgram ints
           result = runST $ do heap <- MA.thaw prog
-                              applyInstruction (newState heap mempty (Identity Exit))
+                              applyInstruction (newState heap mempty Exit)
                               MA.freeze heap
        in result == prog
     it "handles positional output instructions" $ do
       let prog = readProgram (take 10 [1 ..])
           result = runST $ do
                      heap <- MA.thaw prog
-                     s <- applyInstruction (newState heap mempty (Identity (Output (Position 5) 0)))
-                     pure (esOutput s)
-      result `shouldBe` [6]
+                     s <- applyInstruction (newState heap mempty (Output (Position 5)))
+                     pure (view esOutput <$> s)
+      result `shouldBe` Right [6]
     it "handles immediate output instructions" $ do
       let prog = readProgram (take 10 [1 ..])
           result = runST $ do
                      heap <- MA.thaw prog
-                     s <- applyInstruction (newState heap mempty (Identity (Output (Immediate 5) 0)))
-                     pure (esOutput s)
-      result `shouldBe` [5]
+                     s <- applyInstruction (newState heap mempty (Output (Immediate 5)))
+                     pure (view esOutput <$> s)
+      result `shouldBe` Right [5]
     it "does not mutate the heap on output" . property $ \ints ->
       let prog = readProgram ints
           result = runST $ do heap <- MA.thaw prog
-                              let s = newState heap mempty (Identity $ Output (Immediate 5) 0)
+                              let s = newState heap mempty (Output (Immediate 5))
                               s' <- applyInstruction s
-                              _  <- applyInstruction s { esKont = Identity (Output (Position 5) 0) }
+                              _  <- applyInstruction s { _esKont = Output (Position 5) }
                               MA.freeze heap
        in result == prog
 
   describe "nextInstruction" $ do
-    let examples = [ (0, [1,0,0,0,99], Just (Add (Position 0) (Position 0) 0 4))
+    let examples = [ (0, [1,0,0,0,99], Just (Add (Position 0) (Position 0) 0))
                    , (4, [1,0,0,0,99], Just Exit)
-                   , (0, [2,3,0,3,99], Just (Mul (Position 3) (Position 0) 3 4))
-                   , (0, [1002,3,0,3,99], Just (Mul (Position 3) (Immediate 0) 3 4))
-                   , (0, [102,3,0,3,99], Just (Mul (Immediate 3) (Position 0) 3 4))
-                   , (0, [101,3,0,3,99], Just (Add (Immediate 3) (Position 0) 3 4))
-                   , (0, [1001,3,0,3,99], Just (Add (Position 3) (Immediate 0) 3 4))
-                   , (4, [1,9,10,3,2,3,11,0,99,30,40,50], Just (Mul (Position 3) (Position 11) 0 8))
+                   , (0, [2,3,0,3,99], Just (Mul (Position 3) (Position 0) 3))
+                   , (0, [1002,3,0,3,99], Just (Mul (Position 3) (Immediate 0) 3))
+                   , (0, [102,3,0,3,99], Just (Mul (Immediate 3) (Position 0) 3))
+                   , (0, [101,3,0,3,99], Just (Add (Immediate 3) (Position 0) 3))
+                   , (0, [1001,3,0,3,99], Just (Add (Position 3) (Immediate 0) 3))
+                   , (4, [1,9,10,3,2,3,11,0,99,30,40,50], Just (Mul (Position 3) (Position 11) 0))
                    , (8, [1,9,10,3,2,3,11,0,99,30,40,50], Just Exit)
                    , (9, [1,9,10,3,2,3,11,0,99,30,40,50], Nothing)
-                   , (0, [3,3,0,3,99], Just (Input 3 2))
-                   , (0, [4,3,0,3,99], Just (Output (Position 3) 2))
-                   , (0, [104,3,0,3,99], Just (Output (Immediate 3) 2))
+                   , (0, [3,3,0,3,99], Just (Input 3))
+                   , (0, [4,3,0,3,99], Just (Output (Position 3)))
+                   , (0, [104,3,0,3,99], Just (Output (Immediate 3)))
                    ]
     forM_ examples $ \(pos, state, result) -> do
       it ("gets the right result for: nextInstruction " <> show pos <> " " <> show state) $ do
@@ -233,5 +242,5 @@ test = do
     forM_ (zip [0 ..] examples) $ \(i, (initialState, finalState)) -> do
       it ("gets the right result for program " <> show i) $ do
         let program = readProgram initialState
-            result = esHeap $ runST (calculate [] $ readProgram initialState)
-        A.elems result `shouldBe` finalState
+            result = A.elems . view esHeap <$> runST (calculate [] $ readProgram initialState)
+        result `shouldBe` Right finalState
