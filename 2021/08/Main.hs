@@ -41,6 +41,9 @@ segmentPattern = SP . Set.fromList
 contains :: SegmentPattern -> SegmentPattern -> Bool
 contains (SP a) (SP b) = Set.isSubsetOf b a
 
+commonSegments :: SegmentPattern -> SegmentPattern -> SegmentPattern
+commonSegments (SP a) (SP b) = SP $ Set.intersection a b
+
 segmentLength :: SegmentPattern -> Int
 segmentLength = Set.size . segments
 
@@ -52,7 +55,7 @@ main :: IO ()
 main = day 08 parser pt1 pt2 test
   where
     parser = clueP `sepBy1` newline
-    pt1 = print . length . (>>= knownNumbers . display)
+    pt1 = print . length . (>>= knownNumbers . digits . display)
     pt2 = print . sum . fmap (displayedValue . solve)
 
 clueP :: Parser Clue
@@ -101,15 +104,16 @@ test = do
       numbers d `shouldBe` [4]
 
     it "can match up segments to known numbers" $ do
-      knownNumbers (display $ head clues) `shouldBe` [(segmentPattern [F, D, G, A, C, B, E], 8)
-                                                     ,(segmentPattern [G, C, B, E], 4)
-                                                     ]
+      let ps = digits . display $ head clues
+      knownNumbers ps `shouldBe` [(segmentPattern [F, D, G, A, C, B, E], 8)
+                                 ,(segmentPattern [G, C, B, E], 4)
+                                 ]
 
     it "can determine each clues known numbers" $ do
-      fmap (length . knownNumbers . display) clues `shouldBe` [2, 3, 3, 1, 3, 4, 3, 1, 4, 2]
+      fmap (length.knownNumbers.digits.display) clues `shouldBe` [2, 3, 3, 1, 3, 4, 3, 1, 4, 2]
 
     it "knows there are 26 known numbers" $ do
-      length (clues >>= knownNumbers . display) `shouldBe` 26
+      length (clues >>= knownNumbers.digits.display) `shouldBe` 26
 
   describe "solving clues" $ do
     let clueText = "acedgfb cdfbe gcdfa fbcad dab cefabd cdfgeb eafb cagedb ab | cdfeb fcadb cdfeb cdbaf"
@@ -134,13 +138,13 @@ test = do
     it "can solve all clues" $ do
       fmap (displayedValue . solve) clues `shouldBe` [8394, 9781, 1197, 9361, 4873, 8418, 4548, 1625, 8717, 4315]
 
-knownNumbers :: Display -> [(SegmentPattern, Int)]
-knownNumbers d = [(sp, i) | sp <- digits d, [i] <- [numbers sp]]
+knownNumbers :: [SegmentPattern] -> [(SegmentPattern, Word)]
+knownNumbers ps = [(sp, i) | sp <- ps, [i] <- [numbers sp]]
 
 digits :: Display -> [SegmentPattern]
 digits (Display a b c d) = [a, b, c, d]
 
-numbers :: SegmentPattern -> [Int]
+numbers :: SegmentPattern -> [Word]
 numbers ps = case segmentLength ps of
   2 -> [1]
   3 -> [7]
@@ -162,7 +166,7 @@ solve (Clue ps (Display a b c d)) = let dict = determineNumbers ps
 -- this function makes a LOT of assumptions, encoded in the partial pattrn matches and uses of head.
 -- It requires well formed input to work.
 determineNumbers :: [SegmentPattern] -> Map SegmentPattern Word
-determineNumbers ps = invert $ foldl' runStep find1478 [find9, find6, find235, find0]
+determineNumbers ps = invert $ foldl' runStep find1478 [sixers, fivers]
   where
     runStep m step = M.union m . M.fromList $ step m
     invert m = M.fromList [(v, k) | (k, v) <- M.toList m]
@@ -170,36 +174,30 @@ determineNumbers ps = invert $ foldl' runStep find1478 [find9, find6, find235, f
     bySize = M.fromListWith (<>) [(segmentLength sp, [sp]) | sp <- ps]
 
     -- step one, find the numbers with patterns of unique lengths
-    find1478 = M.fromList [(1, head (bySize M.! 2))
-                          ,(7, head (bySize M.! 3))
-                          ,(4, head (bySize M.! 4))
-                          ,(8, head (bySize M.! 7))
-                          ]
+    find1478 = invert . M.fromList $ knownNumbers ps
       
-    -- as soon as we know 1, we can find 6, which is the only sixer that does not contain the one-pattern
-    find6 known = let one = known M.! 1
-                      [six] = filter (not . (`contains` one)) (bySize M.! 6)
-                   in [(6, six)]
+    -- solve the sixer group:
+    --
+    -- includes? | nine | zero | six 
+    -- -----------------------------
+    -- 4         |  x   |  -   |  -  
+    -- 1         |  x   |  x   |  -  
+    sixers known = let one = known M.! 1
+                       four = known M.! 4
+                       (nine, zero, six) = doublePartition (bySize M.! 6) (`contains` four) (`contains` one)
+                   in [(0, zero), (6, six), (9, nine)]
 
-    -- step two, distinguish 2 from [5, 6] (2 is only pattern with one RHS segment that only has
-    -- top part on, but 5 * 6 have bottom part on). Distinguish 5 from 6 by length
-    find235 known = let one = known M.! 1
-                        six = known M.! 6
-                        -- split one into its two component parts
-                        broken_one = segmentPattern . pure <$> Set.elems (segments one)
-                        [shared] = filter (six `contains`) broken_one
-                        ([three], two_five) = L.partition (`contains` one) (bySize M.! 5)
-                        ([five], [two]) = L.partition (`contains` shared) two_five
-                     in [(2, two), (5, five), (3, three)]
+    -- Solve the fiver group
+    --
+    -- includes? | three | two | five 
+    -- -------------------------------
+    -- 1         |  x    |  -  |  -   
+    -- C         |  x    |  x  |  -   
+    fivers known = let one = known M.! 1
+                       six = known M.! 6
+                       shared = commonSegments one six -- the part of one shared with six
+                       (three, five, two) = doublePartition (bySize M.! 5) (`contains` one) (`contains` shared)
+                   in [(2, two), (5, five), (3, three)]
 
-    -- as long as we know 4, we can deduce nine, which is six long and contains four
-    find9 known = let four = known M.! 4
-                      candidates = bySize M.! 6
-                      [nine] = filter (`contains` four) candidates
-                   in [(9,  nine)]
-
-    -- as soon as we know six and nine, we can find 0, with shares the same length as 6 and nine
-    find0 known = let six = known M.! 6
-                      nine = known M.! 9
-                      [zero] = bySize M.! 6 \\ [six, nine]
-                   in [(0, zero)]
+    doublePartition candidates f g = let ([a], ([b], [c])) = L.partition g <$> L.partition f candidates
+                                      in (a, b, c)

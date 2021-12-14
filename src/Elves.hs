@@ -10,7 +10,7 @@ module Elves (
   applyNM,
   cyclePred,
   cycleSucc,
-  best,
+  best, median,
   bestTree,
   namedExamples,
   testing,
@@ -32,7 +32,7 @@ import Control.Monad.Reader
 import Data.List as L
 import Data.Maybe
 import Data.Monoid
-import Data.Ord
+import Data.Ord as X
 import Data.Tree (Forest,Tree(..))
 import Data.Bool
 import qualified Data.Text as Text
@@ -71,6 +71,10 @@ cycleSucc x = if x == maxBound then minBound
 
 best :: Ord b => (a -> b) -> [a] -> Maybe a
 best f = listToMaybe . sortBy (comparing (Down . f))
+
+median :: Ord a => [a] -> Maybe a
+median xs = let xs' = sort xs
+             in listToMaybe $ drop (length xs `div` 2) xs'
 
 bestTree :: (Monoid b, Ord b) => (a -> b) -> Forest a -> b
 bestTree f = maximum . (mempty :) . fmap ((<>) <$> f . rootLabel <*> bestTree f . subForest)
@@ -154,7 +158,7 @@ on2 :: (a -> b -> c) -> (d -> a) -> (e -> b) -> d -> e -> c
 on2 f da eb d e = f (da d) (eb e)
 
 -- from Control.Composition
--- eg: flooring addition => atLeast 0 . (+)
+-- eg: flooring addition => atLeast 0 .* (+)
 (.*) :: (c -> d) -> (a -> b -> c) -> a -> b -> d
 (f .* g) a b = f (g a b)
 

@@ -21,3 +21,10 @@ searchGraph :: (a -> [a]) -> [a] -> Forest a
 searchGraph children = fmap node
   where
     node p = Node p (fmap node (children p))
+
+leaves :: Forest a -> [a]
+leaves = (>>= go)
+  where go n = case n of
+           Node a [] -> [a]
+           Node _ ns -> ns >>= go
+           
