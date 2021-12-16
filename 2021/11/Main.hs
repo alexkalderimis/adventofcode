@@ -11,6 +11,7 @@ import           Data.Attoparsec.Text            (digit)
 import qualified Data.Set as Set
 import           Data.Set (Set, (\\))
 
+import Data.Bool
 import qualified Data.Array.Unboxed as Array
 import qualified Data.Array.MArray as MA
 import           Data.Array.ST (runSTUArray, STUArray)

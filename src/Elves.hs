@@ -161,4 +161,3 @@ on2 f da eb d e = f (da d) (eb e)
 -- eg: flooring addition => atLeast 0 .* (+)
 (.*) :: (c -> d) -> (a -> b -> c) -> a -> b -> d
 (f .* g) a b = f (g a b)
-

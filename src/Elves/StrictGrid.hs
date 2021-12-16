@@ -17,6 +17,9 @@ instance Ix Coord where
   index (a, b) x = Array.index ((row a, col a), (row b, col b)) (row x, col x)
   inRange (a, b) x = Array.inRange ((row a, col a), (row b, col b)) (row x, col x)
 
+origin :: Coord
+origin = Coord (Row 0) (Col 0)
+
 gridP :: IArray a e => Parser e -> Parser (a Coord e)
 gridP p = do
   lines <- some p `sepBy1` newline
