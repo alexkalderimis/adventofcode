@@ -89,6 +89,7 @@ data AStar s q m a c = AStar
     , score    :: !(m a c)
     , memoHeur :: !(m a c)
     , cameFrom :: !(m a a)
+
     , end      :: !(Maybe a)
     }
 
@@ -206,6 +207,7 @@ aStarM :: (Monad m, Hashable a, Ord a, Ord c, Num c) =>
          -> (a -> a -> m c) -- ^ Distance function between neighbouring vertices of the graph. This will
                             -- never be applied to vertices that are not neighbours, so may be undefined
                             -- on pairs that are not neighbours in the graph.
+                            -- always called as `dist from to`, allowing bi-directional edges with different costs
          -> (a -> m c)      -- ^ Heuristic distance to the (nearest) goal. This should never overestimate the
                             -- distance, or else the path found may not be minimal.
          -> (a -> m Bool)   -- ^ The goal, specified as a boolean predicate on vertices.
@@ -225,6 +227,7 @@ aStarOrd :: forall a c. (Ord a, Ord c, Num c) =>
          -> (a -> a -> c) -- ^ Distance function between neighbouring vertices of the graph. This will
                           -- never be applied to vertices that are not neighbours, so may be undefined
                           -- on pairs that are not neighbours in the graph.
+                            -- always called as `dist from to`, allowing bi-directional edges with different costs
          -> (a -> c)      -- ^ Heuristic distance to the (nearest) goal. This should never overestimate the
                           -- distance, or else the path found may not be minimal.
          -> (a -> Bool)   -- ^ The goal, specified as a boolean predicate on vertices.

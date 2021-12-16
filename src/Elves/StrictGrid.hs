@@ -11,6 +11,10 @@ import           Data.Array.IArray (IArray, Ix)
 newtype Row = Row { getRow :: Int } deriving (Show, Eq, Ord, Ix, Enum)
 newtype Col = Col { getCol :: Int } deriving (Show, Eq, Ord, Ix, Enum)
 data Coord = Coord { row :: !Row, col :: !Col } deriving (Show, Eq, Ord)
+data Delta = Delta { dy :: !Int, dx :: !Int } deriving (Show, Eq, Ord)
+
+move :: Coord -> Delta -> Coord
+move c d = Coord (Row $ getRow (row c) + dy d) (Col $ getCol (col c) + dx d)
 
 instance Ix Coord where
   range (a, b) = [Coord r c | (r, c) <- Array.range ((row a, col a), (row b, col b))]
@@ -29,6 +33,9 @@ gridP p = do
   pure . Array.array bs $ do (i, line) <- zip [0..] lines
                              (j, x) <- zip [0..] line
                              pure (Coord (Row i) (Col j), x)
+
+manhattan :: Coord -> Coord -> Int
+manhattan a b = (abs $ getCol (col b) - getCol (col a)) + (abs $ getRow (row b) - getRow (row a))
 
 nextCoords :: Bool -> (Coord, Coord) -> Coord -> [Coord]
 nextCoords includeDiagonals bs (Coord r c) =
