@@ -1,8 +1,14 @@
 snippet advent
 options head
-	import qualified Data.Text as T
-	import           Data.Text (Text)
+	{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+	{-# LANGUAGE OverloadedStrings #-}
+
+	import           Control.Applicative.Combinators
 	import qualified Data.Attoparsec.Text as A
+	import qualified Data.List as L
+	import           Data.Text (Text)
+	import qualified Data.Text as T
+	import           Text.Parser.Char (newline, text)
 
 	import Elves
 	import Elves.Advent
@@ -20,6 +26,11 @@ options head
 snippet import-data-list
 options head
 	import qualified Data.List as L
+
+snippet import-data-array
+options head
+	import qualified Data.Array as Array
+	import           Data.Array (Array)
 
 snippet import-data-map-strict
 options head
