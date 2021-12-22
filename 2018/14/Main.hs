@@ -10,14 +10,10 @@ import           System.Exit
 
 import           Elves.Zipper                (Zipper)
 import qualified Elves.Zipper                as Z
+import           Elves.Advent
 
 main :: IO ()
-main = do
-  args <- getArgs
-  case args of
-    ["pt1"] -> pt1
-    ["pt2"] -> pt2
-    _       -> die "bad arguments. Expected pt1 or pt2"
+main = staticDay 14 pt1 pt2 (pure ())
 
 pt1 :: IO ()
 pt1 = do
@@ -87,10 +83,10 @@ indexOf (n:eedle) = go 0
 run :: (Integral a, Num a, Show a, Read a)
     => (Int,Int) -> Zipper a -> ((Int, Int), Zipper a)
 run (idxa, idxb) z
-  = let vala = Z.focus $ Z.shiftTo idxa z
-        valb = Z.focus $ Z.shiftTo idxb z
+  = let vala = Z.focus $ Z.seek idxa z
+        valb = Z.focus $ Z.seek idxb z
         newRecipes = digits (vala + valb)
-        z' = foldr Z.insertR (Z.shiftToEnd z) newRecipes
+        z' = foldr Z.insertR (Z.seekEnd z) newRecipes
         idxa' = (idxa + (fromIntegral vala) + 1) `mod` Z.zlen z'
         idxb' = (idxb + (fromIntegral valb) + 1) `mod` Z.zlen z'
      in ((idxa', idxb'), z')

@@ -1,10 +1,11 @@
 {-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE OverloadedStrings #-}
 
 import           Control.Applicative
 import           Control.Comonad
 import           Control.Monad
-import qualified Data.Array.Unboxed           as A
 import           Data.Bool
+import qualified Data.Array.Unboxed as A
 import qualified Data.HashMap.Strict          as HM
 import qualified Data.HashSet                 as S
 import           Data.List                    (dropWhileEnd)
@@ -13,17 +14,20 @@ import qualified Data.List.NonEmpty           as NE
 import           Data.Maybe
 import           Data.Text                    (Text)
 import qualified Data.Text                    as Text
-import           System.Environment
-import           System.Exit
-import           Test.Hspec
-import           Test.QuickCheck              (Arbitrary, arbitrary, property)
+
 import           Text.Parser.Char
 import           Text.Parser.Combinators      (choice, sepBy1, sepByNonEmpty)
-import           Text.ParserCombinators.ReadP (ReadP, readP_to_S)
 import           Text.Read                    (readMaybe)
+import           Data.Attoparsec.Text (parseOnly, Parser)
+import           Text.Parser.Char (text, newline)
 
-data Zipper a = Zipper { zOffset :: Int, ls :: [a], focus :: a, rs :: [a] }
-  deriving (Eq, Show, Functor)
+import Test.QuickCheck.Arbitrary (Arbitrary (arbitrary))
+import Test.QuickCheck (property)
+
+import Elves
+import Elves.Advent (day)
+import qualified Elves.Zipper as Z
+import           Elves.Zipper (Zipper, left, right)
 
 data PlantRule = PlantRule { l1, l0, c, r0, r1, ret :: Bool }
   deriving (Eq, Show)
@@ -34,30 +38,17 @@ instance Arbitrary PlantRule where
                         <*> arbitrary <*> arbitrary
                         <*> arbitrary
 
-instance Arbitrary a => Arbitrary (Zipper a) where
-  arbitrary = Zipper <$> arbitrary <*> arbitrary <*> arbitrary <*> arbitrary
-
 type Rule a b = Maybe a -> Maybe a -> Maybe a -> Maybe a -> Maybe a -> b
 
 type PlantState = A.UArray Int Bool
 
 main :: IO ()
-main = do
-  inp <- getContents >>= maybe (die "Could not parse input") pure . runParser inputP
-  args <- getArgs
-  case args of
-    []               -> getFingerPrint inp 20
-    ["cycle"]        -> showCycle inp
-    ["use-cycle", s] -> maybe (die $ "Could not read " ++ s ++ " as an int")
-                              (assumingCycle inp)
-                              (readMaybe s)
-    [s] -> maybe (die $ "Could not read " ++ s ++ " as an int") (getFingerPrint inp)
-                 (readMaybe s)
-    _ -> die $ "bad arguments, expected a number"
+main = day 12 inputP pt1 pt2 spec
   where
-    showCycle inp = print (uncurry detectCycle inp)
+    pt1 = getFingerPrint 20
+    pt2 = assumingCycle 50000000000
     -- assumes there is a cycle - this is needed to complete pt 2
-    assumingCycle (s, rules) n = do
+    assumingCycle n (s, rules) = do
       let c = detectCycle s rules
           stepsRemaining = (n - cycleStart c) `div` cycleLength c
           nextStart = cycleStartVal c + cycleVal c * stepsRemaining
@@ -68,25 +59,25 @@ main = do
                 let gen = runRulesA rules r (fromCycle r c)
                 print (fingerprint $ fromPlantState gen)
     -- assumes there is no cycle
-    getFingerPrint (s,rules) n = do
+    getFingerPrint n (s,rules) = do
       let gen = runRulesA rules n (toPlantState s)
       print (fmap showPlant $ A.elems $ gen)
       print (fingerprint $ fromPlantState gen)
 
 -- get the PlantState after n cycles, starting from where this cycle begins
 fromCycle :: Int -> Cycle -> PlantState
-fromCycle n c = let (Just z) = runParser (fromNonEmpty . NE.fromList <$> some plantP)
-                                         (Text.unpack $ cycleKey c)
-                in toPlantState (z { zOffset = cycleOffset c + (n * cycleOffsetDX c) })
+fromCycle n c = let (Right z) = parseOnly (Z.fromNonEmpty . NE.fromList <$> some plantP)
+                                          (cycleKey c)
+                in toPlantState (z { Z.idx = cycleOffset c + (n * cycleOffsetDX c) })
 
 data Cycle = Cycle
-  { cycleKey      :: Text
-  , cycleStart    :: Int
-  , cycleLength   :: Int
-  , cycleStartVal :: Int
-  , cycleVal      :: Int
-  , cycleOffset   :: Int
-  , cycleOffsetDX :: Int
+  { cycleKey      :: !Text
+  , cycleStart    :: !Int
+  , cycleLength   :: !Int
+  , cycleStartVal :: !Int
+  , cycleVal      :: !Int
+  , cycleOffset   :: !Int
+  , cycleOffsetDX :: !Int
   } deriving (Show)
 
 -- pt 2 requires using the fact that the rules build cycles that can be
@@ -107,16 +98,16 @@ detectCycle s rules =
                                                    os (fst (A.bounds s') - os)
   in go (HM.singleton (key init) (0, fp init, fst (A.bounds init))) 1 init
 
-inputP :: ReadP (Zipper Bool, [PlantRule])
+inputP :: Parser (Zipper Bool, [PlantRule])
 inputP = (,) <$> initialStateP <*> (newline >> newline >> sepBy1 ruleP newline)
 
-initialStateP :: ReadP (Zipper Bool)
-initialStateP = string "initial state: " *> fmap (fromNonEmpty . NE.fromList) (some plantP)
+initialStateP :: Parser (Zipper Bool)
+initialStateP = text "initial state: " *> fmap (Z.fromNonEmpty . NE.fromList) (some plantP)
 
-plantP :: ReadP Bool
+plantP :: Parser Bool
 plantP = choice [True <$ char '#', False <$ char '.']
 
-ruleP :: ReadP PlantRule
+ruleP :: Parser PlantRule
 ruleP = do
   l1 <- plantP
   l0 <- plantP
@@ -126,9 +117,6 @@ ruleP = do
   string " => "
   ret <- plantP
   return (PlantRule l1 l0 c r0 r1 ret)
-
-runParser :: ReadP a -> String -> Maybe a
-runParser p = fmap fst . listToMaybe . reverse . readP_to_S p
 
 compileRules :: [PlantRule] -> Rule Bool Bool
 compileRules rs =
@@ -166,11 +154,11 @@ stepPlantState r ps =
 
 
 fromPlantState :: PlantState -> Zipper Bool
-fromPlantState ps = let (Just z) = fromList (A.elems ps)
-                     in z { zOffset = fst (A.bounds ps) }
+fromPlantState ps = let (Just z) = Z.fromList (A.elems ps)
+                     in z { Z.idx = fst (A.bounds ps) }
 
 toPlantState :: Zipper Bool -> PlantState
-toPlantState z = let xs = toList $ indexed z
+toPlantState z = let xs = Z.toList $ Z.indexed z
                      lb = minimum (fmap fst xs)
                      ub = maximum (fmap fst xs)
                   in A.array (lb,ub) xs
@@ -181,31 +169,8 @@ runRules rules = let r = compileRules rules in iterate (stepState r)
 buildPatterns :: [PlantRule] -> S.HashSet [Bool]
 buildPatterns rs = S.fromList [ [l1,l0,c,r0,r1] | (PlantRule l1 l0 c r0 r1 True) <- rs ]
 
-right :: Zipper a -> Maybe (Zipper a)
-right (Zipper os lhs old (new:rhs)) = Just $ Zipper (succ os) (old:lhs) new rhs
-right _ = Nothing
-
-left :: Zipper a -> Maybe (Zipper a)
-left (Zipper os (new:lhs) old rhs) = Just $ Zipper (pred os) lhs new (old:rhs)
-left _                             = Nothing
-
-rewind :: Zipper a -> Zipper a
-rewind z = case left z of
-  Nothing -> z
-  Just lz -> rewind lz
-
-fromNonEmpty :: NonEmpty a -> Zipper a
-fromNonEmpty (a :| as) = Zipper 0 [] a as
-
-fromList :: [a] -> Maybe (Zipper a)
-fromList []     = Nothing
-fromList (a:as) = Just $ Zipper 0 [] a as
-
-toList :: Zipper a -> [a]
-toList z = reverse (ls z) ++ focus z : rs z
-
-showState :: Zipper Bool -> String
-showState = fmap showPlant . toList
+showState :: Zipper Bool -> Text
+showState = Text.pack . fmap showPlant . Z.toList . Z.seekStart
 
 showRule :: PlantRule -> String
 showRule r = fmap showPlant inputs ++ " => " ++ [showPlant (ret r)]
@@ -214,33 +179,21 @@ showRule r = fmap showPlant inputs ++ " => " ++ [showPlant (ret r)]
 showPlant :: Bool -> Char
 showPlant = bool '.' '#'
 
-instance Comonad Zipper where
-  extract = focus
-  duplicate z = let shift dir = catMaybes . takeWhile isJust . tail . iterate (>>= dir) . Just
-                 in Zipper (zOffset z) (shift left z) z (shift right z)
-
 applyRule :: Rule a b -> Zipper a -> Zipper b
 applyRule r = extend (rule r)
 
 stepState :: Rule Bool Bool -> Zipper Bool -> Zipper Bool
-stepState r = trim . applyRule r . grow False
-
--- we could have infinite zippers, but growing them is
--- slightly better as they stay showable.
-grow :: a -> Zipper a -> Zipper a
-grow a (Zipper os ls c rs) = Zipper os (ls ++ replicate 2 a) c (rs ++ replicate 2 a)
+stepState r = trim . applyRule r . Z.grow False
 
 -- remove the useless Falses, introduced by growing or created
 -- by rules eliminating ends.
 trim :: Zipper Bool -> Zipper Bool
-trim (Zipper os ls c rs) = Zipper os (dropWhileEnd not ls) c (dropWhileEnd not rs)
-
-indexed :: Zipper a -> Zipper (Int, a)
-indexed (Zipper os ls c rs) =
-  Zipper os
-         (zip (iterate pred (os - 1)) ls)
-         (os, c)
-         (zip (iterate succ (os + 1)) rs)
+trim z = let ls' = dropWhileEnd not (Z.lefts z)
+             rs' = dropWhileEnd not (Z.rights z)
+          in z { Z.zlen = 1 + length ls' + length rs'
+               , Z.lefts = ls'
+               , Z.rights = rs'
+               }
 
 -- the zipper based rule evaluator.
 rule :: Rule a b -> Zipper a -> b
@@ -249,13 +202,13 @@ rule r z = r (select (left >=> left))
              (select pure)
              (select right)
              (select (right >=> right))
-  where select move = focus <$> move z
+  where select move = Z.focus <$> move z
 
 fingerprint :: Zipper Bool -> Int
-fingerprint z = sum [i | (i, True) <- toList (indexed z)]
+fingerprint z = sum [i | (i, True) <- Z.toList (Z.indexed z)]
 
-exampleInput :: String
-exampleInput = unlines
+exampleInput :: Text
+exampleInput = Text.unlines
   [ "initial state: #..#.#..##......###...###"
   , ""
   , "...## => #" -- rule 0.
@@ -276,25 +229,31 @@ exampleInput = unlines
 
 spec :: Spec
 spec = do
+  let unzip = Z.toList . Z.seekStart . Z.indexed
+
   describe "inputP" $ do
-    let mInp = runParser inputP exampleInput
+    let mInp = parseOnly inputP exampleInput
     it "has the correct number of rules" $ do
-      fmap (length . snd) mInp `shouldBe` Just 14
+      fmap (length . snd) mInp `shouldBe` Right 14
     it "has the correct initial state" $ do
       let state = "#..#.#..##......###...###"
-      fmap (showState . fst) mInp `shouldBe` Just state
+      fmap (showState . fst) mInp `shouldBe` Right state
     it "has rule 7 correct" $ do
       let rule = "#.#.# => #" -- rule 7.
-      fmap (showRule . (!! 7) . snd) mInp `shouldBe` Just rule
+      fmap (showRule . (!! 7) . snd) mInp `shouldBe` Right rule
+
   describe "State" $ do
     it "can parse and serialise correctly" $ property $ \z ->
-      let expected = (rewind z) { zOffset = 0 }
-       in runParser initialStateP ("initial state: " ++ showState z) `shouldBe` Just expected
+      let expected = Z.rewind z
+          serialized = "initial state: " <> showState z
+       in parseOnly initialStateP serialized `shouldBe` Right expected
+
   describe "PlantRule" $ do
     it "can parse and serialise correctly" $ do
-      property $ \r -> runParser ruleP (showRule r) `shouldBe` Just r
+      property $ \r -> parseOnly ruleP (Text.pack $ showRule r) `shouldBe` Right r
+
   describe "applyRule" $ do
-    let (Just (state, rules)) = runParser inputP exampleInput
+    let (Right (state, rules)) = parseOnly inputP exampleInput
         rule = compileRules rules
         run 0 s = trim s
         run n s = run (n - 1) (stepState rule s)
@@ -304,30 +263,34 @@ spec = do
       showState (run 2 state) `shouldBe` "##..##...##....#..#..#..##"
     it "should step correctly from state r -> state 3, growing the state" $ do
       showState (run 3 state) `shouldBe` "#.#...#..#.#....#..#..#...#"
+
   describe "runRules" $ do
-    let (Just (state, rules)) = runParser inputP exampleInput
+    let (Right (state, rules)) = parseOnly inputP exampleInput
     it "should step correctly from state r -> state 3, growing the state" $ do
       let s = runRules rules state !! 3
       showState (trim s) `shouldBe` "#.#...#..#.#....#..#..#...#"
     it "can proceed to state 20, as per the example" $ do
       let s = runRules rules state !! 20
-          Just asExpected = runParser (some plantP) "#....##....#####...#######....#.#..##"
-      toList (indexed $ trim s) `shouldBe` zip [-2 .. ] asExpected
+          Right asExpected = parseOnly (some plantP) "#....##....#####...#######....#.#..##"
+      unzip (trim s) `shouldBe` zip [-2 .. ] asExpected
+
   describe "potFingerprint" $ do
     it "gets the right fingerprint for generation 20" $ do
-      let (Just (state, rules)) = runParser inputP exampleInput
+      let (Right (state, rules)) = parseOnly inputP exampleInput
           s = runRules rules state !! 20
       fingerprint s `shouldBe` 325
+  -- TODO: move to zipper specs
   describe "indexed" $ do
+    let f = unzip . Z.grow 'x'
     it "can index correctly, marking negative indices" $ do
-      let grown = toList . indexed . grow 'x' $ Zipper 0 [] '-' []
-      grown `shouldBe` [(-2, 'x'), (-1, 'x')
-                        ,(0, '-')
-                        ,(1, 'x'), (2, 'x')
-                        ]
+      let z = Z.Zipper 0 1 [] '-' []
+      f z `shouldBe` [(-2, 'x'), (-1, 'x')
+                     ,(0, '-')
+                     ,(1, 'x'), (2, 'x')
+                     ]
     it "can index correctly, marking negative indices from different base" $ do
-      let grown = toList . indexed . grow 'x' $ Zipper 7 [] '-' []
-      grown `shouldBe` [(5, 'x'), (6, 'x')
-                        ,(7, '-')
-                        ,(8, 'x'), (9, 'x')
-                        ]
+      let z = Z.Zipper 7 1 [] '-' []
+      f z `shouldBe` [(5, 'x'), (6, 'x')
+                     ,(7, '-')
+                     ,(8, 'x'), (9, 'x')
+                     ]

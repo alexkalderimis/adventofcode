@@ -1,7 +1,9 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE FlexibleContexts #-}
 
 module Elves.StrictGrid where
 
+import qualified Data.List.Extra as L
 import           Control.Applicative.Combinators (sepBy1, some)
 import           Text.Parser.Char (newline)
 import Data.Attoparsec.Text (Parser)
@@ -12,9 +14,13 @@ newtype Row = Row { getRow :: Int } deriving (Show, Eq, Ord, Ix, Enum)
 newtype Col = Col { getCol :: Int } deriving (Show, Eq, Ord, Ix, Enum)
 data Coord = Coord { row :: !Row, col :: !Col } deriving (Show, Eq, Ord)
 data Delta = Delta { dy :: !Int, dx :: !Int } deriving (Show, Eq, Ord)
+data Acceleration = Accel { ddy :: (Int -> Int), ddx :: (Int -> Int) }
 
 move :: Coord -> Delta -> Coord
 move c d = Coord (Row $ getRow (row c) + dy d) (Col $ getCol (col c) + dx d)
+
+accelerate :: Acceleration -> Delta -> Delta
+accelerate (Accel ddy ddx) d = d { dy = ddy (dy d), dx = ddx (dx d) }
 
 instance Ix Coord where
   range (a, b) = [Coord r c | (r, c) <- Array.range ((row a, col a), (row b, col b))]
@@ -50,3 +56,8 @@ nextCoords includeDiagonals bs (Coord r c) =
                    , Coord (succ r) (succ c)
                    ]
    in filter (Array.inRange bs) $ mconcat [straights, if includeDiagonals then diagnonals else []]
+
+draw :: IArray a Char => a Coord Char -> String
+draw grid = let (_, ub) = Array.bounds grid
+                w = getCol (col ub) + 1
+             in L.intercalate "\n" . L.chunksOf w $ Array.elems grid

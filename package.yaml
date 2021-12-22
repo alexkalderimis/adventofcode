@@ -49,6 +49,7 @@ library:
     - parser-combinators
     - extra
     - safe
+    - random
 
 executables:
   adventofcode-exe:

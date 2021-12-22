@@ -30,7 +30,7 @@ import Control.Applicative as X
 import Control.Monad as X
 import Control.Monad.Reader
 import Data.List as L
-import Data.Maybe
+import Data.Maybe as X
 import Data.Monoid
 import Data.Ord as X
 import Data.Tree (Forest,Tree(..))
