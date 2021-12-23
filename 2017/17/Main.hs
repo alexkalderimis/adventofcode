@@ -9,7 +9,7 @@ main :: IO ()
 main = staticDay 17 pt1 pt2 test
   where
     pt1 = print (nextVal $ runSpinLock 359 2017)
-    pt2 = print (nextVal $ B.rewind $ runSpinLock 359 50000000)
+    pt2 = print (after0 $ spinlock 359 50000000)
 
 test = do
   describe "example" $ do
@@ -35,6 +35,25 @@ test = do
                    ]
     it "runs to the correct conclusion" $ do
       nextVal (runSpinLock n 2017) `shouldBe` 638
+  describe "spinlock" $ do
+    it "can track 1 insertion" $ do
+      after0 (spinlock 3 1) `shouldBe` 1
+    it "can track 2 insertions" $ do
+      after0 (spinlock 3 2) `shouldBe` 2
+    it "can track 3 insertions" $ do
+      after0 (spinlock 3 3) `shouldBe` 2
+    it "can track 4 insertions" $ do
+      after0 (spinlock 3 4) `shouldBe` 2
+    it "can track 5 insertions" $ do
+      after0 (spinlock 3 5) `shouldBe` 5
+    it "can track 6 insertions" $ do
+      after0 (spinlock 3 6) `shouldBe` 5
+    it "can track 7 insertions" $ do
+      after0 (spinlock 3 7) `shouldBe` 5
+    it "can track 8 insertions" $ do
+      after0 (spinlock 3 8) `shouldBe` 5
+    it "can track 9 insertions" $ do
+      after0 (spinlock 3 9) `shouldBe` 9
 
 -- get the value to the right of the current position
 nextVal = B.focus . B.right
@@ -64,3 +83,21 @@ runSpinLock n j = L.foldl' (flip (insert n)) (B.singleton 0) [1 .. j]
 
 insert :: Int -> Int -> Buffer Int -> Buffer Int
 insert n i = B.right . B.insertR i . B.shift n
+
+data Spinlock = Spinlock { after0 :: !Int, idx :: !Int }
+  deriving (Show)
+
+-- we don't have to keep track of the whole buffer state, just what is
+-- currently after 0. Since once inserted, a value is only moved by having
+-- another value inserted to its left, we only need to track values inserted
+-- to the right of 0.
+spinlock :: Int -> Int -> Spinlock
+spinlock n j = L.foldl' go (Spinlock 0 1) [1 .. j]
+  where
+    go s x = let insertion = (idx s + n) `mod` x
+                 idx' = insertion + 1
+                 s' = s { idx = idx' }
+              in case insertion of
+                   0 -> s' { after0 = x }
+                   _ -> s'
+
