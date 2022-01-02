@@ -14,6 +14,8 @@ import           Data.Ix         (Ix)
 import qualified Data.Ix         as Ix
 import qualified Data.List       as L
 
+import qualified Elves.StrictGrid as G
+
 type Bounds i = (i,i)
 
 type Accessor a b = ReifiedLens a a b b
@@ -29,6 +31,9 @@ instance Arbitrary Heuristic where
 measure :: (Coord a, Real (Dimension a)) => Heuristic -> a -> a -> Double
 measure Euclidean = straightLine
 measure Manhattan = (realToFrac .) . manhattan
+
+magnitude :: (Coord a, Real (Dimension a)) => a -> Double
+magnitude = straightLine origin
 
 newtype RealPoint a = RealPoint { realPoint :: a } deriving (Show, Eq, Ord, Ix)
 
@@ -52,6 +57,10 @@ instance Extent Double where
   extent a b = b - a
   midpoint a b = (a + b) / 2
 
+instance Extent G.Row where
+  extent (G.Row a) (G.Row b) = G.Row (extent a b)
+  midpoint (G.Row a) (G.Row b) = G.Row (midpoint a b)
+
 instance Coord Int where
   type Dimension Int = Int
   dimensions = [Lens (lens id (pure id))]
@@ -61,6 +70,13 @@ instance Coord Double where
   type Dimension Double = Double
   dimensions = [Lens (lens id (pure id))]
   origin = 0
+
+instance Coord G.Coord where
+  type Dimension G.Coord = Int
+  origin = G.origin
+  dimensions = [Lens $ lens (G.getRow . G.row) (\c i -> c { G.row = G.Row i })
+               ,Lens $ lens (G.getCol . G.col) (\c i -> c { G.col = G.Col i })
+               ]
 
 scaleBounds :: Extent a => a -> Bounds a -> Bounds a
 scaleBounds factor (lb, ub) = let size = extent lb ub
@@ -128,9 +144,17 @@ points :: Coord c => c -> [Dimension c]
 points c = [ c ^. d | Lens d <- dimensions ]
 
 -- is a entirely within b?
-within :: (Num (Dimension a), Ord (Dimension a), Coord a)
-       => Bounds a -> Bounds a -> Bool
-within a b = none (> 0) (mindists a b)
+contains :: (Ord (Dimension a), Coord a)
+         => Bounds a -> Bounds a -> Bool
+contains (lb, ub) b = containsP lb b && containsP ub b
+
+containsP :: (Ord (Dimension a), Coord a) => a -> Bounds a -> Bool
+containsP p (lb, ub) = all f dimensions
+  where
+    f d = let x = view (runLens d) p
+              lb' = view (runLens d) lb
+              ub' = view (runLens d) ub
+           in lb' <= x && x <= ub'
 
 corners :: (Coord i) => (i,i) -> [i]
 corners (lb,ub) = L.foldl' f [lb] dimensions
@@ -146,8 +170,8 @@ overlaps a b = all (== 0) (mindists a b)
 -- general purpose function for computing a straight-line distance
 -- between two points on a Cartesian plane of an arbitrary number of dimensions
 straightLine :: (Real (Dimension c), Coord c, Floating b) => c -> c -> b
-straightLine a b
-  = sqrt . sum . fmap ((^ (2 :: Int)) . realToFrac . abs) $ zipWith subtract (points a) (points b)
+straightLine a b = sqrt . sum $ zipWith ((sqr .) . subtract) (points a) (points b)
+  where sqr = (^ (2 :: Int)) . realToFrac . abs
 
 translate :: (Num (Dimension i), Coord i) => i -> i -> i
 translate delta pos = L.foldl' (\c d -> c & runLens d %~ (+ view (runLens d) delta)) pos dimensions

@@ -55,7 +55,7 @@ tilesSpec = describe "tiles" $ do
 
       specify "all intersections are entirely within outer" 
         $ property $ \(TileInput outer is) ->
-           all (\x -> x `within` outer) is
+           all (\x -> contains x outer) is
 
       specify "all intersections are different"
         $ property $ \(TileInput _ is) -> L.nub is === is
@@ -153,7 +153,7 @@ neighboursSpec = describe "neighbours" $ do
     $ property $ \(NeighbourInput outer inner) ->
       let ns = namedNeighbours outer inner
           test p n = p .&&. counterexample (unwords [show n, "not within outer"])
-                                           (snd n `within` outer)
+                                           (contains (snd n) outer)
        in L.foldl' test (property True) ns
 
   specify "no neighbour is bigger than the outer region"

@@ -37,7 +37,7 @@ import           Test.QuickCheck.Arbitrary (Arbitrary (arbitrary, shrink),
                                             arbitraryBoundedEnum)
 import           Test.QuickCheck.Gen       (suchThat)
 
-import           Elves.Coord (Bounds, Extent, Coord, Dimension, dimensions, straightLine, within, overlaps)
+import           Elves.Coord (Bounds, Extent, Coord, Dimension, dimensions, straightLine, overlaps)
 import qualified Elves.Coord as Coord
 import           Elves.Core
 
@@ -86,6 +86,9 @@ missing1 :: [a] -> [[a]]
 missing1 xs = [pref ++ drop 1 suff | n <- [0 .. length xs - 1]
                                  , let (pref,suff) = L.splitAt n xs
               ]
+
+singleton :: Bounds i -> a -> RTree i a
+singleton = Leaf
 
 instance (Hashable i, Hashable a) => Hashable (RTree i a)
 
@@ -182,11 +185,12 @@ delete :: (Coord i, Eq i, Num (Dimension i), Ord (Dimension i)) => Bounds i -> R
 delete i t = case t of
   Tip          -> Tip
   Leaf j _     | i == j -> Tip
-  Region bs ts | within i bs -> untip (Region bs (delete i <$> ts))
+  Region bs ts | relevant bs -> untip (Region bs (delete i <$> ts))
   _            -> t
  where
    untip (Region bs ts) = maybe Tip (Region bs) $ NE.nonEmpty $ NE.filter (not . null) ts
    untip x = x
+   relevant = Coord.contains i
 
 -- edit a value in place, with the option to insert/delete
 alter :: (Extendable i)
@@ -300,7 +304,7 @@ instance Arbitrary QueryStrategy where
 
 matches :: (Num (Dimension i), Ord (Dimension i), Coord i) => QueryStrategy -> Bounds i -> Bounds i -> Bool
 matches Precisely   = (==)
-matches Within      = within
+matches Within      = Coord.contains
 matches Overlapping = overlaps
 
 query :: (Queryable i) => QueryStrategy -> (i,i) -> RTree i a -> [(Bounds i,a)]
@@ -355,7 +359,7 @@ priorityQueue _ = Heap.empty
 -- is rhs entirely within lhs?
 contains :: (Coord i, Ord (Dimension i), Num (Dimension i))
          => RTree i a -> RTree i a -> Bool
-contains a b = fromMaybe False $ liftA2 within (bounds b) (bounds a)
+contains a b = fromMaybe False $ liftA2 Coord.contains (bounds b) (bounds a)
 
 overlapping :: (Coord i, Num (Dimension i), Ord (Dimension i))
             => RTree i a -> RTree i a -> Bool

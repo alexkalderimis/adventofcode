@@ -1,3 +1,5 @@
+{-# LANGUAGE TypeFamilies      #-}
+
 module Elves.Geometry where
 
 import Prelude hiding (zipWith)
@@ -6,14 +8,42 @@ import qualified Data.List                       as L
 import qualified Data.Vector as V
 import           Data.Vector (Vector)
 import           Data.Tree                       (Tree (..))
+import           Control.Lens    (at, _1, _2, _3, iso, Lens', ReifiedLens(..), lens)
+import Data.Coerce (coerce)
+import Control.Lens.Iso (coerced)
 
 import Elves.Collections
+import Elves.Coord (Coord(..))
+import           Test.QuickCheck.Arbitrary
 
 -- nicer names for these things
 type Point a = Vector a
 type Region a = [Point a]
 
 data Plane a = Plane a (Point a)
+
+point :: [a] -> Point a
+point = V.fromList
+
+-- unsafe lenses
+pointX, pointY, pointZ :: Lens' (Point a) a
+pointX = lens (\p -> p V.! 0) (\p x -> p V.// [(0, x)])
+pointY = lens (\p -> p V.! 1) (\p y -> p V.// [(1, y)])
+pointZ = lens (\p -> p V.! 2) (\p z -> p V.// [(2, z)])
+
+newtype Point3 a = P3 { unpoint3 :: Point a } deriving (Show, Eq, Ord)
+
+instance (Num a, Ord a) => Coord (Point3 a) where
+  type Dimension (Point3 a) = a
+  origin = P3 (point [0, 0, 0])
+  dimensions = [ Lens (coerced . pointX)
+               , Lens (coerced . pointY)
+               , Lens (coerced . pointZ)
+               ]
+
+instance Arbitrary a => Arbitrary (Point3 a) where
+  arbitrary = do (x, y, z) <- arbitrary
+                 pure . P3 $ point [x, y, z]
 
 -- Bunch of functions for dealing with N-dimensional geometry:
 

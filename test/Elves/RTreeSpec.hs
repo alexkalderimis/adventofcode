@@ -10,7 +10,7 @@ import           Control.Category         ((>>>))
 import           Control.Concurrent       (threadDelay)
 import qualified Control.Concurrent.Async as Async
 import           Control.Exception.Base   (Exception)
-import           Control.Lens             hiding (index)
+import           Control.Lens             hiding (index, equality)
 import qualified Data.Foldable            as F
 import           Data.Functor.Compose
 import qualified Data.Ix                  as Ix
@@ -28,58 +28,14 @@ import           Elves.LawsSpec
 import           Elves.RTree              hiding (null)
 import qualified Elves.RTree              as RT
 
-type Dim3 = (Int,Int,Int)
-type Dim3Set = RTree (Int,Int,Int) ()
+import Support.BoundingBoxes (Dim3, Cube(..))
+
+type Dim3Set = RTree Dim3 ()
 
 newtype Unique a = Unique { getUnique :: [a] } deriving (Show)
 
 instance (Arbitrary a, Eq a) => Arbitrary (Unique a) where
   arbitrary = Unique . L.nub <$> arbitrary
-
-newtype Cube = Cube
-  { getCube :: ((Int,Int,Int), (Int,Int,Int))
-  } deriving (Show, Eq)
-
-cubeSize :: Cube -> Int
-cubeSize (Cube bs) = Ix.rangeSize bs
-
-instance Arbitrary Cube where
-  arbitrary = do
-    (a,b,c) <- arbitrary
-    a' <- arbitrary `suchThat` (>= a)
-    b' <- arbitrary `suchThat` (>= b)
-    c' <- arbitrary `suchThat` (>= c)
-    return (Cube ((a,b,c),(a',b',c')))
-
-  shrink c = let (Cube (lb,ub)) = c
-              in filter (/= c)
-                 $ fmap (\d -> let (a,b) = makeCloser (lb ^. runLens d) (ub ^. runLens d)
-                               in Cube (set (runLens d) a lb, set (runLens d) b ub))
-                   dimensions
-
-data CubeWithPoint = CubeWithPoint Cube (Int,Int,Int) deriving (Show)
-
-instance Arbitrary CubeWithPoint where
-  arbitrary = do
-    c <- arbitrary
-    p <- QC.elements (Ix.range (getCube c))
-    return (CubeWithPoint c p)
-
-  shrink (CubeWithPoint c p) = [CubeWithPoint shrunk p | shrunk <- shrink c
-                                                       , Ix.inRange (getCube shrunk) p
-                               ]
-
-data CubeWithCube = CubeWithCube Cube Cube deriving (Show)
-
-instance Arbitrary CubeWithCube where
-  arbitrary = do
-    a <- arbitrary
-    b <- arbitrary `suchThat` within a
-    return (CubeWithCube (Cube a) (Cube b))
-  shrink (CubeWithCube a b) = [CubeWithCube (Cube a') (Cube b') | (Cube a') <- shrink a
-                                                                , (Cube b') <- shrink b
-                                                                , a' `within` b'
-                              ]
 
 data NNInput a = NNInput a a [a] deriving Show
 
@@ -91,14 +47,8 @@ instance (Arbitrary a, Ord a) => Arbitrary (NNInput a) where
     return (NNInput x y xs)
   shrink (NNInput a b cs) = NNInput a b <$> shrink cs
 
-makeCloser :: Int -> Int -> (Int,Int)
-makeCloser a b = case b - a of
-  0 -> (a,b)
-  1 -> (a + 1, b)
-  _ -> (a + 1, b - 1)
-
 query1 :: Dim3 -> Dim3Set -> [(Dim3,())]
-query1 i t = fmap (first fst) . take 1 $ query Within (i,i) t
+query1 i = fmap (first fst) . take 1 . query Within (i,i)
 
 subregions :: RTree i a -> [RTree i a]
 subregions (Region _ ts) = NE.toList ts
@@ -127,7 +77,6 @@ spec = describe "Elves.RTree" $ do
   expandSpec
   querySpec
   lookupSpec
-  withinSpec
   expandQuerySpec
   nearestNeighbourSpec
   nearestNeighbourKSpec
@@ -173,34 +122,50 @@ querySpec = describe "query" $ do
          in (getCube e, ()) `elem` query strategy (getCube e) t
 
     describe "QueryStrategy" $ do
-      let a = Leaf (0, 10) 'A'
-          b = Leaf (5, 15) 'B'
-          c = Leaf (5, 10) 'C'
-          d = Leaf (20,30) 'D'
-          e = Leaf (-5,-1) 'E'
-          f = Leaf (23,27) 'F'
-          t = mconcat [a,b,c,d,e,f :: RTree Int Char]
-      let search i s = query s i t
-          shouldFind x = (`shouldContain` [x]) . fmap snd
+      --- -----0+++++++++1+++++++++2+++++++++3
+      --  5----0----5----0----5----0----5----0
+      --       [=========]                     A
+      --            [=========]                B
+      --            [====]                     C
+      --  [===]                                E
+      --                           [=========] D
+      --                              [====]   F
+      let a = singleton (0, 10) 'A' :: RTree Int Char
+          b = singleton (5, 15) 'B'
+          c = singleton (5, 10) 'C'
+          d = singleton (20,30) 'D'
+          e = singleton (-5,-1) 'E'
+          f = singleton (23,27) 'F'
+          t = mconcat [a,b,c,d,e,f]
+      let search i s      = query s i t
+          shouldFind x    = (`shouldContain` [x]) . fmap snd
           shouldNotFind x = (`shouldNotContain` [x]) . fmap snd
+
       consider Precisely $ do
         forM_ [a,b,c,d,e,f] $ \(Leaf i a) -> do
           which (show i <> " matches only itself") (search i >>> (`shouldBe` [(i,a)]))
+
       consider Within $ do
         forM_ [a,b,c,d,e,f] $ \(Leaf i a) -> do
           which (show i <> " matches at least itself") (search i >>> shouldFind a)
-        which "finds f inside d"         (search (20,30) >>> shouldFind 'F')
-        which "does not find a inside d" (search (20,30) >>> shouldNotFind 'A')
-        which "finds c inside a"         (search ( 0,10) >>> shouldFind 'C')
-        which "does not find b inside a" (search ( 0,10) >>> shouldNotFind 'B')
+        which "finds f within d"         (search (20,30) >>> shouldFind 'F')
+        which "does not find a within d" (search (20,30) >>> shouldNotFind 'A')
+        which "finds c within a"         (search ( 0,10) >>> shouldFind 'C')
+        which "does not find b within a" (search ( 0,10) >>> shouldNotFind 'B')
+        which "does not find a within b" (search ( 5,15) >>> shouldNotFind 'A')
+        which "finds b within (0, 20)"   (search ( 0,20) >>> shouldFind 'B')
         which "does not find d inside a" (search ( 0,10) >>> shouldNotFind 'D')
+
       consider Overlapping $ do
         forM_ [a,b,c,d,e,f] $ \(Leaf i x) -> do
           which (show i <> " matches at least itself") (search i >>> shouldFind x)
         forM_ (pairs [a,b,c]) $ \(Leaf i x, Leaf _ y) -> do
           which ("finds " <> [y] <> " overlapping " <> [x]) (search i >>> shouldFind y)
+        forM_ (pairs [d, f]) $ \(Leaf i x, Leaf _ y) -> do
+          which ("finds " <> [y] <> " overlapping " <> [x]) (search i >>> shouldFind y)
         forM_ [a,b,c,d,f] $ \(Leaf i x) -> do
           which ("does not find E overlapping " <> [x]) (search i >>> shouldNotFind 'E')
+          which ("does not find " <> [x] <> " E") (search (-5, -1) >>> shouldNotFind x)
 
     it "expanding a query never makes it less specific" $ property $ \e elems ->
       let t = index' (e : elems)
@@ -232,17 +197,6 @@ lookupSpec = describe "lookup" $ do
          in if RT.member q (oneDB a)
                then r === lookup q a
                else r === lookup q b
-
-withinSpec = describe "within" $ do
-    specify "all cubes that are within other cubes also overlap" $ property $ \(CubeWithCube (Cube a) (Cube b)) ->
-      overlaps a b
-    specify "all points in cube are entirely within it" $ property $ \(CubeWithPoint cube p) ->
-      (p,p) `within` getCube cube
-
-    it "knows that (-3,-3,-3,-3),(3,3,3,3) is not within (0,-4,0,0),(0,4,0,0)" $ do
-      ((0,-4,0),(0,4,0)) `shouldNotSatisfy` within ((-3,-3,-3),(3,3,3))
-    it "knows that (0,-4,0,0),(0,4,0,0) is not within (-3,-3,-3,-3),(3,3,3,3)" $ do
-      ((-3,-3,-3),(3,3,3)) `shouldNotSatisfy` within ((0,-4,0),(0,4,0))
 
 expandQuerySpec = describe "expandQuery" $ do
     it "always includes the query" $ property $ \(NonNegative n) q ->
@@ -501,35 +455,33 @@ stackOfCardsSpec = describe "stack-of-cards" $ do
         cards = zipWith (\p chr -> mkCard p p chr) [1 .. 20] ['a' ..]
         tests t = do
           let limit = 100 * 4000
-          it "can used to build a tree" $ QC.within 1000 $ do
+              withCard t = QC.within limit $ QC.forAll (QC.elements cards) t
+          it "can used to build a tree" $ QC.within limit $ do
             size t `shouldBe` length cards
-          it "can select a known card"
-            $ QC.within limit $ QC.forAll (QC.elements cards) $ \card ->
+          it "can select a known card" . withCard $ \card ->
               RT.lookup (fst card) t === Just (snd card)
-          it "can overwrite a specific card"
-            $ QC.within limit $ QC.forAll (QC.elements cards) $ \card ->
+          it "can overwrite a specific card" . withCard $ \card ->
               let t' = insertWith pure (fst card) 'X' t
                in size t' === size t .&&. t =/= t'
-          it "an overwritten card stores the correct value"
-            $ QC.within limit $ QC.forAll (QC.elements cards) $ \card ->
+          it "an overwritten card stores the correct value" . withCard $ \card ->
               let t' = insertWith pure (fst card) 'X' t
                in RT.lookup (fst card) t' === Just 'X'
-          it "can find the cards beneath a card"
-            $ QC.within limit $ QC.forAll (QC.elements cards) $ \card ->
+          it "can find the cards beneath a card" . withCard $ \card ->
               let origin = fst . fst $ card
                   r = snd <$> RT.query Overlapping (origin, origin) t
                in r === ['a' .. snd card]
-          it "knows all cards overlap each other"
-            $ QC.within limit $ QC.forAll (QC.elements cards) $ \card ->
+          it "knows all cards overlap each other" . withCard $ \card ->
               let r = snd <$> RT.query Overlapping (fst card) t
                in r === fmap snd cards
-          it "can insert any additional card"
+          it "can insert any additional card" 
             $ let origins = fst . fst <$> cards
                   newOrigin = arbitrary `suchThat` (`notElem` origins)
-               in QC.within limit $ QC.forAll newOrigin $ \(x,y) ->
-                  let card = mkCard x y 'X'
-                      t' = insertWith pure (fst card) (snd card) t
-                   in size t' === (size t + 1)
+               in QC.within limit $
+                  QC.forAll newOrigin $ \(x,y) ->
+                    let card = mkCard x y 'X'
+                        t' = insertWith pure (fst card) (snd card) t
+                     in size t' === (size t + 1)
+
     describe "fromList" (tests $ RT.fromList cards)
     describe "mconcat" (tests $ mconcat [Leaf bs a | (bs,a) <- cards])
 
@@ -554,7 +506,7 @@ oneDBools = describe "1D-Bool"  $ do
 oneDBoolCounterExamples = do
   let oneDB = (cast :: Cast (RTree Int Bool))
       is = eq :: Comparator (RTree Int Bool)
-      t_o = 10000
+      t_o = 20000
       sgCounter name a b c = describe name $ do
         let l_assoc = (a <> b) <> c
             r_assoc = a <> (b <> c)

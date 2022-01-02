@@ -10,8 +10,8 @@ import Data.Attoparsec.Text (Parser)
 import qualified Data.Array.IArray as Array
 import           Data.Array.IArray (IArray, Ix)
 
-newtype Row = Row { getRow :: Int } deriving (Show, Eq, Ord, Ix, Enum)
-newtype Col = Col { getCol :: Int } deriving (Show, Eq, Ord, Ix, Enum)
+newtype Row = Row { getRow :: Int } deriving (Show, Eq, Ord, Ix, Enum, Num)
+newtype Col = Col { getCol :: Int } deriving (Show, Eq, Ord, Ix, Enum, Num)
 data Coord = Coord { row :: !Row, col :: !Col } deriving (Show, Eq, Ord)
 data Delta = Delta { dy :: !Int, dx :: !Int } deriving (Show, Eq, Ord)
 data Acceleration = Accel { ddy :: (Int -> Int), ddx :: (Int -> Int) }

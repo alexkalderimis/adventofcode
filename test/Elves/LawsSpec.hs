@@ -47,14 +47,22 @@ equality cast f preserve purturb = describe "Eq" $ do
 monoid :: (Arbitrary a, Monoid a, Show a) => Comparator a -> SpecWith ()
 monoid eq = describe "Monoid" $ parallel $ do
   let t_o = 100 * 10000
-  specify "mempty is right identity" $ property $ \t -> QC.within t_o $
-    (t <> mempty) `eq` t
-  specify "mempty is left identity" $ property $ \t -> QC.within t_o $
-    (mempty <> t) `eq` t
-  specify "semigroup law" $ withMaxSuccess 75 $ \a b c -> QC.within t_o $ do
-    (a <> (b <> c)) `eq` ((a <> b) <> c)
-  specify "mconcat is fold of <>" $ withMaxSuccess 20 $ \ts -> QC.within t_o $
-    mconcat ts `eq` foldr (<>) mempty ts
+
+  specify "mempty is right identity" $
+    QC.within t_o $
+    withMaxSuccess 20 $ \t -> (t <> mempty) `eq` t
+
+  specify "mempty is left identity" $
+    QC.within t_o $
+    withMaxSuccess 20 $ \t -> (mempty <> t) `eq` t
+
+  specify "semigroup law" $
+    QC.within t_o $
+    withMaxSuccess 20 $ \a b c -> (a <> (b <> c)) `eq` ((a <> b) <> c)
+
+  specify "mconcat is fold of <>" $
+    QC.within t_o $
+    withMaxSuccess 20 $ \ts -> mconcat ts `eq` foldr (<>) mempty ts
 
 traversable :: (Traversable t, Arbitrary (t a), Show (t a), Eq (t a)) => Cast (t a) -> SpecWith ()
 traversable cast = describe "Traversable" $ do
