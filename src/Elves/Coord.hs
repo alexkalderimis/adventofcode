@@ -148,6 +148,7 @@ contains :: (Ord (Dimension a), Coord a)
          => Bounds a -> Bounds a -> Bool
 contains (lb, ub) b = containsP lb b && containsP ub b
 
+-- like Ix.inRange, but also for non-integral values
 containsP :: (Ord (Dimension a), Coord a) => a -> Bounds a -> Bool
 containsP p (lb, ub) = all f dimensions
   where

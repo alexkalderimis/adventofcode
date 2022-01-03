@@ -67,6 +67,8 @@ split reg p = fmap (\e -> p : filter (/= e) reg) reg
 
 -- generate just the points in the plane, without even
 -- considering any other irrelevant points.
+--
+-- Returns the points that sum to a total a, ignoring negative quadrants.
 planePoints :: (Num a, Enum a, Cons f, Monoid (f a), Applicative f)
             => a -> Word -> [f a]
 planePoints total dimensionality = untree $ summingTree total dimensionality

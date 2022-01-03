@@ -1,3 +1,4 @@
+-- Two dimenstional tiling
 module Elves.Tiling where
 
 import Data.Ord

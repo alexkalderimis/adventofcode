@@ -4,6 +4,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE ConstraintKinds #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module Elves.RTree where
 
@@ -13,6 +14,7 @@ import           Control.Applicative       hiding (empty)
 import           Control.Arrow             (first)
 import           Control.DeepSeq           (NFData (..))
 import           Control.Lens              hiding (contains, indexed)
+import           Control.Monad             (foldM)
 import           Data.Foldable             (Foldable (foldMap))
 import qualified Data.Foldable             as F
 import           Data.Function             (on)
@@ -20,9 +22,7 @@ import           Data.Functor.Classes      (Eq1 (..), Eq2 (..))
 import           Data.Hashable             (Hashable)
 import           Data.Heap                 (Entry (..), Heap)
 import qualified Data.Heap                 as Heap
-import           Data.Ix                   (Ix)
-import qualified Data.Ix                   as Ix
-import qualified Data.List                 as L
+import qualified Data.List.Extra           as L
 import           Data.List.NonEmpty        (NonEmpty (..))
 import qualified Data.List.NonEmpty        as NE
 import           Data.Maybe
@@ -32,10 +32,11 @@ import           Data.Semigroup
 import qualified Data.Traversable          (Traversable (traverse))
 import qualified Data.Tree                 as Tree
 import           GHC.Generics              (Generic)
+import           GHC.Stack (HasCallStack)
 
 import           Test.QuickCheck.Arbitrary (Arbitrary (arbitrary, shrink),
                                             arbitraryBoundedEnum)
-import           Test.QuickCheck.Gen       (suchThat)
+import           Test.QuickCheck.Gen       (chooseInt, suchThat)
 
 import           Elves.Coord (Bounds, Extent, Coord, Dimension, dimensions, straightLine, overlaps)
 import qualified Elves.Coord as Coord
@@ -43,24 +44,38 @@ import           Elves.Core
 
 type Extendable i = (Queryable i, Extent (Dimension i))
 
-type Queryable i =  (Coord i, Num (Dimension i), Ord (Dimension i))
+type Queryable i =  (Coord i, Num (Dimension i), Eq (Dimension i), Ord (Dimension i))
 
-newtype ValidBounds i = ValidBounds
-  { getValidBounds :: (i,i)
+newtype ValidBounds = ValidBounds
+  { getValidBounds :: (Int,Int)
   } deriving (Show, Eq)
 
-instance (Arbitrary i, Ord (Dimension i), Coord i) => Arbitrary (ValidBounds i) where
+instance Arbitrary ValidBounds where
+  arbitrary = do
+    lb <- chooseInt (-500, 500)
+    ub <- chooseInt (lb, 500)
+
+    return (ValidBounds (lb,ub))
+
+newtype ArbitraryBounds i = ArbitraryBounds
+  { arbitraryBounds :: (i, i)
+  } deriving (Show, Eq)
+
+instance (Ord (Dimension i), Coord i, Arbitrary (Dimension i), Arbitrary i)
+  => Arbitrary (ArbitraryBounds i) where
   arbitrary = do
     lb <- arbitrary
-    ub <- arbitrary `suchThat` allDimensionsAbove lb
-    return (ValidBounds (lb,ub))
-   where
-     allDimensionsAbove lb ub = all (\(Lens d) -> lb^.d <= ub^.d) dimensions
+    ub <- foldM (f lb) Coord.origin dimensions
+    
+    pure (ArbitraryBounds (lb, ub))
+    where
+      f lb c d = do x <- arbitrary `suchThat` (>= view (runLens d) lb)
+                    pure (set (runLens d) x c)
 
 data RTree i a
   = Tip
-  | Leaf (Bounds i) a
-  | Region (Bounds i) (NonEmpty (RTree i a))
+  | Leaf !i !i a
+  | Region !i !i (NonEmpty (RTree i a))
   deriving (Functor, Generic)
 
 instance (Show i, Show a) => Show (RTree i a) where
@@ -69,8 +84,8 @@ instance (Show i, Show a) => Show (RTree i a) where
                   . showsPrec (app_prec+1) (assocs t)
          where app_prec = 10
 
-instance (Arbitrary i, Arbitrary a, Extendable i) => Arbitrary (RTree i a) where
-  arbitrary = fmap (fromList . fmap (first getValidBounds)) arbitrary
+instance (Arbitrary (Dimension i), Arbitrary i, Arbitrary a, Extendable i) => Arbitrary (RTree i a) where
+  arbitrary = fmap (fromList . fmap (first arbitraryBounds)) arbitrary
   shrink t = do
     pairs <- missing1 (assocs t)
     return (fromList pairs)
@@ -88,7 +103,15 @@ missing1 xs = [pref ++ drop 1 suff | n <- [0 .. length xs - 1]
               ]
 
 singleton :: Bounds i -> a -> RTree i a
-singleton = Leaf
+singleton (lb, ub) a = Leaf lb ub a
+
+region :: (HasCallStack, Ord (Dimension i), Coord i) => NonEmpty (RTree i a) -> RTree i a
+region ts = case NE.filter (not . null) ts of
+              [] -> Tip
+              [t] -> t
+              ts -> let ts' = NE.fromList ts
+                        (i,j) = boundingBox ts'
+                     in Region i j ts'
 
 instance (Hashable i, Hashable a) => Hashable (RTree i a)
 
@@ -96,24 +119,24 @@ instance (NFData i, NFData a) => NFData (RTree i a)
 
 instance Foldable (RTree a) where
   foldMap f t = case t of Tip         -> mempty
-                          Leaf _ a    -> f a
-                          Region _ ts -> foldMap (foldMap f) ts
+                          Leaf _ _ a    -> f a
+                          Region _ _ ts -> foldMap (foldMap f) ts
 
 instance Traversable (RTree i) where
   traverse _ Tip            = pure Tip
-  traverse f (Leaf i a)     = Leaf i <$> f a
-  traverse f (Region bs ts) = Region bs <$> sequenceA (traverse f <$> ts)
+  traverse f (Leaf i j a)     = Leaf i j <$> f a
+  traverse f (Region i j ts) = Region i j <$> sequenceA (traverse f <$> ts)
 
 instance (Extendable i) => Semigroup (RTree i a) where
   (<>) = union
 
 instance (Extendable i) => Monoid (RTree i a) where
-  mempty = empty
+  mempty = Tip
   mappend = (<>)
 
 instance Eq2 RTree where
-    liftEq2 eqi eqa t1 t2 =
-        size t1 == size t2 && liftEq (liftEq2 (eqtup eqi) eqa) (assocs t1) (assocs t2)
+  liftEq2 eqi eqa t1 t2 =
+      size t1 == size t2 && liftEq (liftEq2 (eqtup eqi) eqa) (assocs t1) (assocs t2)
 
 eqtup :: (a -> b -> Bool) -> (a,a) -> (b,b) -> Bool
 eqtup f a b = (fst a `f` fst b) && (snd a `f` snd b)
@@ -141,14 +164,19 @@ getPoint :: Coord i => Bounds i -> i
 getPoint = fst
 
 bounds :: RTree i a -> Maybe (Bounds i)
-bounds (Leaf b _)   = Just b
-bounds (Region b _) = Just b
-bounds Tip          = Nothing
+bounds (Leaf i j _)   = Just (i, j)
+bounds (Region i j _) = Just (i, j)
+bounds Tip            = Nothing
+
+bounds' :: HasCallStack => RTree i a -> Bounds i
+bounds' (Leaf i j _) = (i, j)
+bounds' (Region i j _) = (i, j)
+bounds' _ = error "Cannot extract bounds of empty tree"
 
 indexed :: RTree i a -> RTree i (Bounds i, a)
 indexed Tip            = Tip
-indexed (Leaf i a)     = Leaf i (i,a)
-indexed (Region bs ts) = Region bs (indexed <$> ts)
+indexed (Leaf i j a)   = Leaf i j ((i,j), a)
+indexed (Region i j ts) = Region i j (indexed <$> ts)
 
 locations :: RTree i a -> [Bounds i]
 locations = F.toList . fmap fst . indexed
@@ -159,8 +187,11 @@ assocs = F.toList . indexed
 elems :: RTree i a -> [a]
 elems = F.toList
 
-maxPageSize :: Int
-maxPageSize = 4 -- tuneable page size
+maxPageSize :: forall i a. Coord i => RTree i a -> Int
+maxPageSize t = 2 ^ length dims
+  where
+    dims :: [Coord.Accessor i (Dimension i)]
+    dims = dimensions
 
 size :: RTree i a -> Int
 size = sum . fmap (pure 1)
@@ -168,9 +199,49 @@ size = sum . fmap (pure 1)
 fromList :: (Extendable i) => [(Bounds i, a)] -> RTree i a
 fromList = fromListWith pure
 
-fromListWith :: (Extendable i)
+fromPoints :: (Extendable i) => [(i, a)] -> RTree i a
+fromPoints ps = fromList [ ((p,p), x) | (p, x) <- ps ]
+
+fromPointsWith :: (Extendable i) => (a -> a -> a) -> [(i, a)] -> RTree i a
+fromPointsWith f ps = fromListWith f [ ((p,p), x) | (p, x) <- ps ]
+
+fromListWith :: forall i a. (Extendable i)
              => (a -> a -> a) -> [(Bounds i, a)] -> RTree i a
-fromListWith f = L.foldl' (\t (bs, a) -> unionWith (flip f) (Leaf bs a) t) Tip
+fromListWith f kvs =
+  let tip = Tip :: RTree i a
+      pageSize = maxPageSize tip
+   in case kvs of
+        []                -> tip
+        [a]               -> singleton' a
+        _ | lots pageSize -> bulkLoad f kvs
+        _ -> let kvs' = dedupe kvs
+                 (init, rest) = L.splitAt pageSize kvs'
+                 t0 = region (singleton' <$> NE.fromList init)
+              in L.foldl' (\t (k, a) -> insertWith f k a t) t0 rest
+  where
+    lots n = longerThan (2 * n) kvs
+    singleton' (k,v) = singleton k v
+    dedupe = fmap (\grp -> (fst (head grp), foldl1 f (snd <$> grp))) . L.groupOn fst . L.sortOn fst
+
+bulkLoad :: Extendable i
+         => (a -> a -> a) -> [(Bounds i, a)] -> RTree i a
+bulkLoad f kvs = let init = region (seeds $ fmap fst kvs)
+                  in untip $ L.foldl' (\t (k, a) -> insertWith f k a t) init kvs
+
+-- a set of dummy regions, equally dividing up the total space, each with a single tip in them.
+seeds :: forall i a. Extendable i => [Bounds i] -> NonEmpty (RTree i a)
+seeds bs
+  = let dims = dimensions
+        box = L.foldl1 expandB bs
+        bss = L.foldl' splitBounds [box] dims
+     in NE.fromList [ Region i j (pure Tip) | (i, j) <- bss ]
+  where
+    dims :: [Coord.Accessor i (Dimension i)]
+    dims = dimensions
+    splitBounds unsplit d = let read = view (runLens d)
+                                write = set (runLens d)
+                             in unsplit >>= \(lb, ub) -> let mp = Coord.midpoint (read lb) (read ub)
+                                                          in [(lb, write mp ub), (write mp lb, ub)]
 
 insert :: (Extendable i) => Bounds i -> a -> RTree i a -> RTree i a
 insert = insertWith pure
@@ -179,25 +250,31 @@ insertPoint :: (Extendable i) => i -> a -> RTree i a -> RTree i a
 insertPoint i = insert (i,i)
 
 insertWith :: (Extendable i) => (a -> a -> a) -> Bounds i -> a -> RTree i a -> RTree i a
-insertWith f i a = unionWith f (Leaf i a)
+insertWith f i a = unionWith f (singleton i a)
 
-delete :: (Coord i, Eq i, Num (Dimension i), Ord (Dimension i)) => Bounds i -> RTree i a -> RTree i a
-delete i t = case t of
-  Tip          -> Tip
-  Leaf j _     | i == j -> Tip
-  Region bs ts | relevant bs -> untip (Region bs (delete i <$> ts))
-  _            -> t
- where
-   untip (Region bs ts) = maybe Tip (Region bs) $ NE.nonEmpty $ NE.filter (not . null) ts
-   untip x = x
-   relevant = Coord.contains i
+delete :: (Extendable i) => Bounds i -> RTree i a -> RTree i a
+delete = alter (pure Nothing)
 
 -- edit a value in place, with the option to insert/delete
 alter :: (Extendable i)
       => (Maybe a -> Maybe a) -> Bounds i -> RTree i a -> RTree i a
-alter f bs t = case f (lookup bs t) of
-  Just x -> insert bs x t
-  Nothing -> delete bs t
+alter f k t = case t of
+  Leaf lb ub a | k == (lb, ub) -> case f (Just a) of
+                                    Nothing -> Tip
+                                    Just x -> singleton k x
+  Region lb ub ts -> case NE.partition (includes k) ts of
+                                     ([], _) -> case f Nothing of
+                                                  Just x -> insert k x t
+                                                  Nothing -> t
+                                     (xs, ys) -> let lhs = untip $ alter f k (mconcat xs)
+                                                     rhs = mconcat ys
+                                                  in lhs <> rhs
+  _ -> t <> maybe Tip (singleton k) (f Nothing)
+
+-- remove all tips from within the top level of the tree, and resize if needed.
+untip :: (Ord (Dimension i), Coord i) => RTree i a -> RTree i a
+untip (Region _ _ ts) | any null ts = region ts
+untip t = t
 
 null :: RTree i a -> Bool
 null Tip = True
@@ -211,87 +288,85 @@ union :: (Extendable i)
 union = unionWith pure
 
 -- The meat of the matter - adding two trees together.
-unionWith :: (Extendable i)
+unionWith :: (HasCallStack, Extendable i)
           => (a -> a -> a) -> RTree i a -> RTree i a -> RTree i a
 -- the trivial cases: tips are identities of union
 unionWith f Tip right = right
 unionWith f left Tip  = left
 -- when both are leaves, we need to deal with collisions
-unionWith f l@(Leaf i a) r@(Leaf j b)
-  | i == j    = Leaf i (f a b)
-  | otherwise = Region (expandB i j) (sortKids (l :| pure r))
+unionWith f l@(Leaf i j a) r@(Leaf i' j' b)
+  | i == i' && j == j' = Leaf i j (f a b)
+  | otherwise = let kids = sortKids (l :| pure r) in region kids
 unionWith f l r
   -- when l overlaps r, we need to insert l into r somehow.
   | overlapping l r = compact $ case l of
-      Leaf i a    -> let bs' = maybe i (expandB i) (bounds r)
-                         ts' = sortKids . insertChild f i a $ subtrees r
-                      in Region bs' ts'
-      Region _ ts -> F.foldl' (\a t -> unionWith f t a) r ts
+      Leaf i j a    -> let k = (i,j)
+                           ts' = sortKids . insertChild f k a $ subtrees r
+                        in region ts'
+      Region _ _ ts -> F.foldl' (\a t -> unionWith f t a) r ts
   -- safe to use fromJust here, as we have guarded against Tips
   -- in the trivial cases above.
-  | otherwise      = let bs' = fromJust (expandB <$> bounds l <*> bounds r)
+  | otherwise      = let (lb,ub) = fromJust (expandB <$> bounds l <*> bounds r)
                          ts' = sortKids (l :| pure r)
-                      in Region bs' ts'
+                      in Region lb ub ts'
 
 sortKids :: (Ord i) => NonEmpty (RTree i a) -> NonEmpty (RTree i a)
 sortKids = NE.sortBy (comparing bounds)
 
 -- remove useless intermediary nodes
 compact :: RTree i a -> RTree i a
-compact (Region _ (t :| [])) = t
-compact t                    = t
+compact (Region _ _ (t :| [])) = t
+compact t                      = t
 
 -- Remove (at-most) one layer of structure, returning the immediately
 -- accessible subtrees
 --
 -- Satisfies: sconcat (subtrees t) === t
 subtrees :: RTree i a -> NonEmpty (RTree i a)
-subtrees (Region _ ts) = ts
-subtrees t             = pure t
+subtrees (Region _ _ ts) = ts
+subtrees t               = pure t
 
 -- Decompose a tree into a list of leaves
 --
 -- Satisfies: mconcat (subtrees t) === t
 leaves :: RTree i a -> [RTree i a]
 leaves t = case t of
-  Region _ ts -> NE.toList ts >>= leaves
-  Tip         -> []
-  _           -> pure t
+  Region _ _ ts -> NE.toList ts >>= leaves
+  Tip           -> []
+  _             -> pure t
 
 insertChild :: (Extendable i)
             => (a -> a -> a) -> Bounds i -> a
             -> NonEmpty (RTree i a) -> NonEmpty (RTree i a)
-insertChild f bs a ts = case (length ts < maxPageSize, none isRegion ts) of
-  (True, True)   -> insertInto $ NE.partition colliding ts
-  (isSmall, _)   -> maybe (fallback isSmall) insertInto
-                    $ foldr (<|>) Nothing [ divide (member bs)
-                                          , divide (`contains` t)
-                                          , divide (overlapping t)
-                                          ]
+insertChild f k a ts 
+  | (collisions, rest) <- NE.partition (collides k) ts
+  , not (L.null collisions)
+  = unionWith f t (mconcat collisions) :| rest
+
+  | length ts < maxPageSize t
+  = pure t <> ts
+
+  | (best :| rest) <- selectChild t ts -- (joinOverlapping ts)
+  = unionWith f t best :| rest
+
   where
-    -- insert child into best position in the current list. This ensures that
-    -- any collisions will always be selected first, followed by overlaps.
-    fallback isSmall
-      | isSmall && none (overlapping t) ts = NE.cons t ts
-      | otherwise = let (best :| rest) = selectChild t ts
-                     in unionWith f t best :| rest
-    -- given a set of good choices, insert the child into their union
-    insertInto (best,rest) = unionWith f t (mconcat best) :| rest
     -- the child
-    t = Leaf bs a
+    t = singleton k a
 
-    divide f = neitherNull $ NE.partition f ts
+joinOverlapping :: Extendable i => NonEmpty (RTree i a) -> NonEmpty (RTree i a)
+joinOverlapping (t :| ts)
+  = case L.partition (overlapping t) ts of
+      (xs, ys) -> case NE.nonEmpty ys of
+                    Nothing -> pure (mconcat xs)
+                    Just ys' -> pure (mconcat xs) <> ys'
 
-    colliding = maybe False (== bs) . bounds
-    overlappingReg = liftA2 (&&) (overlapping t) isRegion
-    -- choose the child that needs the smallest expansion to contain the child,
-    -- in a tie, choose the child that is closest in extent to the child itself.
-    -- This is designed to make sure we prefer collisions to containment
-    neitherNull (xs,ys) = if L.null xs || L.null ys
-                             then Nothing
-                             else Just (xs,ys)
+-- does this tree collide with these bounds?
+collides bs = maybe False (== bs) . bounds
 
-selectChild t ts = NE.sortBy (comparing (\x -> (expansion t x, expansion x t))) ts
+-- choose the child that needs the smallest expansion to contain the child,
+-- in a tie, choose the child that is closest in extent to the child itself.
+-- This is designed to make sure we prefer collisions to containment
+selectChild t = NE.sortBy . comparing $ \x -> (expansion t x, expansion x t)
 
 isRegion :: RTree i a -> Bool
 isRegion Region{} = True
@@ -302,17 +377,22 @@ data QueryStrategy = Precisely | Within | Overlapping deriving (Show, Eq, Bounde
 instance Arbitrary QueryStrategy where
   arbitrary = arbitraryBoundedEnum
 
-matches :: (Num (Dimension i), Ord (Dimension i), Coord i) => QueryStrategy -> Bounds i -> Bounds i -> Bool
+matches :: (Queryable i) => QueryStrategy -> Bounds i -> Bounds i -> Bool
 matches Precisely   = (==)
 matches Within      = Coord.contains
 matches Overlapping = overlaps
 
 query :: (Queryable i) => QueryStrategy -> (i,i) -> RTree i a -> [(Bounds i,a)]
 query strat q t
-  | Just b <- bounds t
-  , overlaps q b = case t of Leaf i a    -> [ (i,a) | matches strat i q ]
-                             Region _ ts -> NE.toList ts >>= query strat q
-  | otherwise             = []
+  | Region i j ts <- t
+  , matches Overlapping (i, j) q
+  = NE.toList ts >>= query strat q
+
+  | Leaf i j a <- t
+  , matches strat (i, j) q
+  = pure ( (i, j), a )
+
+  | otherwise = []
 
 lookup :: (Queryable i) => Bounds i -> RTree i a -> Maybe a
 lookup q = fmap snd . listToMaybe . query Precisely q
@@ -349,9 +429,9 @@ priorityOrder dist pnt = L.unfoldr go . (enqueue =<< priorityQueue)
     go q = do
       (e,q') <- Heap.uncons q
       case Heap.payload e of
-        Tip         -> go q' -- impossible, but harmless
-        Leaf i a    -> pure ((i,a),q')
-        Region _ ts -> go (L.foldl' enqueue q' ts)
+        Tip           -> go q' -- impossible, but harmless
+        Leaf i j a    -> pure (((i,j),a),q')
+        Region _ _ ts -> go (L.foldl' enqueue q' ts)
 
 priorityQueue :: RTree i a -> Heap (Entry Double (RTree i a))
 priorityQueue _ = Heap.empty
@@ -361,11 +441,14 @@ contains :: (Coord i, Ord (Dimension i), Num (Dimension i))
          => RTree i a -> RTree i a -> Bool
 contains a b = fromMaybe False $ liftA2 Coord.contains (bounds b) (bounds a)
 
+includes :: (Coord k, Ord (Dimension k)) => Bounds k -> RTree k a -> Bool
+includes bs t = fromMaybe False (Coord.contains bs <$> bounds t)
+
 overlapping :: (Coord i, Num (Dimension i), Ord (Dimension i))
             => RTree i a -> RTree i a -> Bool
 overlapping a b = fromMaybe False $ liftA2 overlaps (bounds a) (bounds b)
 
--- how much bigger does rhs han'encompass lhs?
+-- how much bigger does rhs hand need to be to encompass lhs?
 expansion :: (Extendable i) => RTree i a -> RTree i a -> Dimension i
 expansion t t' | t' `contains` t = 0
 expansion t t' = sizeWith t t' - extent t'
@@ -388,6 +471,9 @@ expand i bs = foldr f bs dimensions
 expandB :: (Ord (Dimension i), Coord i) => Bounds i -> Bounds i -> Bounds i
 expandB (i,j) = expand i . expand j
 
+boundingBox :: (HasCallStack, Ord (Dimension i), Coord i) => NonEmpty (RTree i a) -> Bounds i
+boundingBox ts = let (b :| bs) = bounds' <$> ts in L.foldl' expandB b bs
+
 expandQuery :: (Ord (Dimension i), Num (Dimension i), Coord i)
             => Int -> (i,i) -> (i,i)
 expandQuery n q = L.foldl' go q dimensions
@@ -401,9 +487,9 @@ scaleQuery f q = L.foldl' go q dimensions
 
 structure :: (Show i, Show a) => RTree i a -> Tree.Forest String
 structure t = case t of
-  Tip          -> []
-  Leaf i a     -> node (show i <> " => " <> show a) []
-  Region bs ts -> node (show bs) (NE.toList ts >>= structure)
+  Tip           -> []
+  Leaf i j a    -> node (show i <> ".." <> show j <> " => " <> show a) []
+  Region i j ts -> node (show i <> ".." <> show j) (NE.toList ts >>= structure)
  where node = (pure .) . Tree.Node
 
 drawTree :: (Show i, Show a) => RTree i a -> String
@@ -423,3 +509,7 @@ diffTree a b = do
     (Nothing, Nothing) -> pure (q, Neither) -- impossible
     (Just x, Just y)   -> if x == y then [] else pure (q, Diff x y)
 
+longerThan :: Int -> [a] -> Bool
+longerThan n xs = case xs of
+  [] -> False
+  (_ : tl) -> if n <= 0 then True else longerThan (n - 1) tl

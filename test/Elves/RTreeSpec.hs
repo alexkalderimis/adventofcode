@@ -28,7 +28,7 @@ import           Elves.LawsSpec
 import           Elves.RTree              hiding (null)
 import qualified Elves.RTree              as RT
 
-import Support.BoundingBoxes (Dim3, Cube(..))
+import Support.BoundingBoxes (Dim2, Dim3, Cube(..))
 
 type Dim3Set = RTree Dim3 ()
 
@@ -51,8 +51,8 @@ query1 :: Dim3 -> Dim3Set -> [(Dim3,())]
 query1 i = fmap (first fst) . take 1 . query Within (i,i)
 
 subregions :: RTree i a -> [RTree i a]
-subregions (Region _ ts) = NE.toList ts
-subregions _             = []
+subregions (Region _ _ ts) = NE.toList ts
+subregions _               = []
 
 maxRegionSize :: RTree i a -> Int
 maxRegionSize t = let rs = subregions t
@@ -62,9 +62,9 @@ tree :: [Dim3] -> Dim3Set
 tree = RT.fromList . flip zip (repeat ()) . fmap dbl
 
 depth :: RTree i a -> Int
-depth Tip           = 0
-depth Leaf{}        = 1
-depth (Region _ ts) = 1 + maximum (depth <$> ts)
+depth Tip             = 0
+depth Leaf{}          = 1
+depth (Region _ _ ts) = 1 + maximum (depth <$> ts)
 
 dbl :: a -> (a,a)
 dbl = (,) <$> id <*> id
@@ -130,23 +130,28 @@ querySpec = describe "query" $ do
       --  [===]                                E
       --                           [=========] D
       --                              [====]   F
-      let a = singleton (0, 10) 'A' :: RTree Int Char
-          b = singleton (5, 15) 'B'
-          c = singleton (5, 10) 'C'
-          d = singleton (20,30) 'D'
-          e = singleton (-5,-1) 'E'
-          f = singleton (23,27) 'F'
+      let k = (,) :: Int -> Int -> (Int, Int)
+          a = singleton (k 0 10) 'A' :: RTree Int Char
+          b = singleton (k 5 15) 'B'
+          c = singleton (k 5 10) 'C'
+          d = singleton (k 20 30) 'D'
+          e = singleton (k (-5) (-1)) 'E'
+          f = singleton (k 23 27) 'F'
           t = mconcat [a,b,c,d,e,f]
       let search i s      = query s i t
           shouldFind x    = (`shouldContain` [x]) . fmap snd
           shouldNotFind x = (`shouldNotContain` [x]) . fmap snd
 
       consider Precisely $ do
-        forM_ [a,b,c,d,e,f] $ \(Leaf i a) -> do
+        forM_ [a,b,c,d,e,f] $ \t -> do
+          let i = bounds' t
+              a = head (elems t)
           which (show i <> " matches only itself") (search i >>> (`shouldBe` [(i,a)]))
 
       consider Within $ do
-        forM_ [a,b,c,d,e,f] $ \(Leaf i a) -> do
+        forM_ [a,b,c,d,e,f] $ \t -> do
+          let i = bounds' t
+              a = head (elems t)
           which (show i <> " matches at least itself") (search i >>> shouldFind a)
         which "finds f within d"         (search (20,30) >>> shouldFind 'F')
         which "does not find a within d" (search (20,30) >>> shouldNotFind 'A')
@@ -157,13 +162,17 @@ querySpec = describe "query" $ do
         which "does not find d inside a" (search ( 0,10) >>> shouldNotFind 'D')
 
       consider Overlapping $ do
-        forM_ [a,b,c,d,e,f] $ \(Leaf i x) -> do
+        forM_ [a,b,c,d,e,f] $ \t -> do
+          let i = bounds' t
+              x = head (elems t)
           which (show i <> " matches at least itself") (search i >>> shouldFind x)
-        forM_ (pairs [a,b,c]) $ \(Leaf i x, Leaf _ y) -> do
-          which ("finds " <> [y] <> " overlapping " <> [x]) (search i >>> shouldFind y)
-        forM_ (pairs [d, f]) $ \(Leaf i x, Leaf _ y) -> do
-          which ("finds " <> [y] <> " overlapping " <> [x]) (search i >>> shouldFind y)
-        forM_ [a,b,c,d,f] $ \(Leaf i x) -> do
+        forM_ (pairs [a,b,c]) $ \(Leaf i j x, Leaf _ _ y) -> do
+          which ("finds " <> [y] <> " overlapping " <> [x]) (search (i,j) >>> shouldFind y)
+        forM_ (pairs [d, f]) $ \(Leaf i j x, Leaf _ _ y) -> do
+          which ("finds " <> [y] <> " overlapping " <> [x]) (search (i,j) >>> shouldFind y)
+        forM_ [a,b,c,d,f] $ \t -> do
+          let i = bounds' t
+              x = head (elems t)
           which ("does not find E overlapping " <> [x]) (search i >>> shouldNotFind 'E')
           which ("does not find " <> [x] <> " E") (search (-5, -1) >>> shouldNotFind x)
 
@@ -171,17 +180,15 @@ querySpec = describe "query" $ do
       let t = index' (e : elems)
        in (first dbl e) `elem` query Within (expandQuery 3 $ (fst e, fst e)) (t :: Dim3Set)
     it "can find the midpoint in this line" $ do
-      let t = Region ((0,-4,0,0),(0,4,0,0)) (NE.fromList [Leaf (dbl (0,0,0,0)) ()
-                                                         ,Leaf (dbl (0,4,0,0)) ()
-                                                         ,Leaf (dbl (0,-4,0,0)) ()
-                                                         ])
+      let p k = singleton (dbl k) ()
+          t = region $ NE.fromList [p (0,0,0,0), p (0,4,0,0), p (0,-4,0,0)]
       query Within ((-3,-3,-3,-3),(3,3,3,3)) t `shouldSatisfy` elem (dbl (0,0,0,0), ())
 
 lookupSpec = describe "lookup" $ do
   let oneDB = (cast :: Cast (RTree Int Bool))
 
   specify "We can find anything present in the tree" $ property $ \(Cube bs) x t ->
-    lookup bs (Leaf bs x <> t) === Just (x :: Word)
+    lookup bs (singleton bs x <> t) === Just (x :: Word)
 
   specify "We cannot find anything not present in the tree"
    $ property $ \(Cube bs) xs ->
@@ -243,8 +250,9 @@ nearestNeighbourKSpec = describe "nearestNeighbourK" $ do
 insertSpec = describe "insert" $ do
 
     describe "duplicate entry" $ do
-      let a = Region ( 0,3) (Leaf ( 0,1) True  :| [Leaf (2,3) False])
-          b = Region (-1,3) (Leaf (-1,2) False :| [Leaf (2,3) True])
+      let dup = singleton (2,3)
+          a = region $ NE.fromList [singleton ( 0,1) True, dup True]
+          b = region $ NE.fromList [singleton (-1,2) False, dup False]
       it "does not exist" $ do
         size (a <> b :: RTree Int Bool) `shouldBe` 3
       it "has the value of the LHS when the LHS is a" $ do
@@ -259,14 +267,25 @@ insertSpec = describe "insert" $ do
           size (t1 <> t2) === (size t1) + (size t2) - 1
 
     describe "counter-example-1" $ do
-      let a = Region (-2,3) (Leaf (-2,1) False :| [Leaf (3,3) True])
-          b = Region (0,4) (Leaf (0,3) True :| [Leaf (0,4) False])
-      specify "We can combine these regions" $ QC.within 100000 $ do
+      let a = Region (-2) 3 $ NE.fromList [ singleton (-2,1) False
+                                          , singleton (3,3) True
+                                          ]
+          b = Region 0 4 $ NE.fromList [ singleton (0,3) True
+                                       , singleton (0,4) False
+                                       ]
+
+      specify "We can combine these regions" $ QC.within 100 $ do
         size (a <> b :: RTree Int Bool) === 4
+
       describe "minimal-test-case" $ do
-        let mtc = compact $ Region (-2,4) $ sortKids $ insertChild pure (3,3) True
-                          $ (Leaf (-2,1) False :| [Leaf (0,3) True, Leaf (0,4) False])
-        it "completes successfully" $ QC.within 100000 $ do
+        let mtc = compact
+                  $ Region (-2) 4
+                  $ sortKids
+                  $ insertChild pure (3,3) True
+                  $ NE.fromList
+                  $ [singleton (-2,1) False, singleton (0,3) True, singleton (0,4) False]
+
+        it "completes successfully" $ QC.within 100 $ do
           size (mtc :: RTree Int Bool) === 4
 
     specify "nested-objects" $ QC.within 1000 $ do
@@ -285,12 +304,12 @@ insertSpec = describe "insert" $ do
     -- |C    +---------+  D| 8
     -- +----------+ +------+ 9
     describe "a severely overlapping case" $ do
-      let a = Leaf (( 0,  0), ( 4,  8)) 'A'
-          b = Leaf (( 0, 10), ( 4, 20)) 'B'
-          c = Leaf (( 5,  0), ( 9, 11)) 'C'
-          d = Leaf (( 5, 13), ( 9, 20)) 'D'
-          e = Leaf (( 2,  6), ( 8, 16)) 'E'
-          f = Leaf (( 3,  3), ( 6, 17)) 'F'
+      let a = singleton (( 0,  0), ( 4,  8)) 'A'
+          b = singleton (( 0, 10), ( 4, 20)) 'B'
+          c = singleton (( 5,  0), ( 9, 11)) 'C'
+          d = singleton (( 5, 13), ( 9, 20)) 'D'
+          e = singleton (( 2,  6), ( 8, 16)) 'E'
+          f = singleton (( 3,  3), ( 6, 17)) 'F'
       forM_ [a,b,c,d] $ flip consider $ do
         which "overlaps e" (`shouldSatisfy` overlapping e)
         which "overlaps f" (`shouldSatisfy` overlapping f)
@@ -310,93 +329,82 @@ insertSpec = describe "insert" $ do
           t' = insertPoint (i :: Dim3) () t
       size t + delta `shouldBe` size t'
 
-    it "handles this other quick-check counterexample" $ QC.within 100000 $ do
-      let objects =    [(((-59,-49,-29),(-36,-36,-12)), 'A')
-                       ,(((-55,-29,-31),(-14,-23,-16)), 'B')
-                       ,(((-29,-51,-33),(-4,-49,3)),    'C')
-                       ,(((-44,-16,-13),(40,18,25)),    'D')
-                       ,(((-11,-56,-15),(-9,19,4)),     'E')
-                       ,(((-10,-60,-20),(21,-13,-16)),  'F')
-                       ,(((-58,3,23),(4,13,32)),        'G')
-                       ,(((-48,-15,-9),(-17,-10,55)),   'H')
-                       ,(((-36,-47,2),(-8,21,37)),      'I')
-                       ,(((-54,4,-24),(15,9,54)),       'J')
-                       ,(((-47,-3,14),(31,7,57)),       'K')
-                       ,(((-42,-4,-1),(42,16,28)),      'L')
-                       ,(((-47,-49,39),(59,1,44)),      'M')
-                       ,(((-58,14,56),(-26,45,61)),     'N')
-                       ,(((-56,26,34),(30,34,35)),      'O')
-                       ,(((-29,15,24),(31,31,52)),      'P')
-                       ,(((-37,-52,45),(56,72,49)),     'Q')
-                       ,(((-5,-5,32),(26,46,45)),       'R')
-                       ,(((0,31,47),(13,37,56)),        'S')
-                       ,(((-58,-1,-35),(-23,35,38)),    'T')
-                       ,(((-46,6,-47),(1,36,12)),       'U')
-                       ,(((-42,0,-50),(-22,51,-36)),    'V')
-                       ,(((-52,30,-45),(60,54,-27)),    'W')
-                       ,(((-44,14,16),(24,64,38)),      'X')
-                       ,(((-36,-30,-49),(8,51,8)),      'Y')
-                       ,(((-50,32,60),(47,64,73)),      'Z')
-                       ,(((-17,47,-3),(37,63,16)),      'a')
-                       ,(((-38,27,8),(75,63,41)),       'b')
-                       ,(((-4,21,40),(26,76,42)),       'c')
-                       ,(((6,43,34),(14,44,35)),        'd')
-                       ,(((4,3,13),(32,48,62)),         'e')
-                       ,(((38,29,-47),(72,41,79)),      'f')
-                       ,(((40,41,35),(65,68,37)),       'g')
-                       ,(((-8,35,-59),(59,35,-3)),      'h')
-                       ,(((-1,51,-41),(22,67,59)),      'i')
-                       ,(((34,-21,-40),(52,54,-34)),    'j')
-                       ,(((47,44,-40),(63,52,-26)),     'k')
-                       ,(((48,34,-52),(71,82,-39)),     'l')
-                       ,(((59,42,-51),(61,81,-46)),     'm')
-                       ,(((53,43,54),(90,90,66)),       'n')
-                       ,(((-32,-22,10),(54,18,40)),     'o')
-                       ,(((-30,-3,26),(58,2,49)),       'p')
-                       ,(((19,-39,35),(43,60,36)),      'q')
-                       ,(((21,-19,28),(62,-1,30)),      'r')
-                       ,(((36,-41,31),(59,-37,36)),     's')
-                       ,(((60,-13,-15),(68,20,60)),     't')
-                       ,(((-25,-54,-22),(46,-18,32)),   'u')
-                       ,(((-12,-33,-47),(39,46,-29)),   'v')
-                       ,(((7,-29,-35),(18,-23,-30)),    'w')
-                       ,(((-1,-48,-11),(51,-42,22)),    'x')
-                       ,(((49,-31,-17),(56,-10,5)),     'y')
-                       ,(((58,-3,-28),(69,28,56)),      'z')
-                       ,(((57,-57,42),(69,36,53)),      'α')
-                       ,(((52,55,-32),(65,100,112)),    'β')
-                       ,(((58,54,28),(90,95,55)),       'γ')
-                       ]
+    it "handles this other quick-check counterexample" $ do
+      let objects = [(((-59,-49,-29),(-36,-36,-12)), 'A')
+                    ,(((-55,-29,-31),(-14,-23,-16)), 'B')
+                    ,(((-29,-51,-33),(-4,-49,3)),    'C')
+                    ,(((-44,-16,-13),(40,18,25)),    'D')
+                    ,(((-11,-56,-15),(-9,19,4)),     'E')
+                    ,(((-10,-60,-20),(21,-13,-16)),  'F')
+                    ,(((-58,3,23),(4,13,32)),        'G')
+                    ,(((-48,-15,-9),(-17,-10,55)),   'H')
+                    ,(((-36,-47,2),(-8,21,37)),      'I')
+                    ,(((-54,4,-24),(15,9,54)),       'J')
+                    ,(((-47,-3,14),(31,7,57)),       'K')
+                    ,(((-42,-4,-1),(42,16,28)),      'L')
+                    ,(((-47,-49,39),(59,1,44)),      'M')
+                    ,(((-58,14,56),(-26,45,61)),     'N')
+                    ,(((-56,26,34),(30,34,35)),      'O')
+                    ,(((-29,15,24),(31,31,52)),      'P')
+                    ,(((-37,-52,45),(56,72,49)),     'Q')
+                    ,(((-5,-5,32),(26,46,45)),       'R')
+                    ,(((0,31,47),(13,37,56)),        'S')
+                    ,(((-58,-1,-35),(-23,35,38)),    'T')
+                    ,(((-46,6,-47),(1,36,12)),       'U')
+                    ,(((-42,0,-50),(-22,51,-36)),    'V')
+                    ,(((-52,30,-45),(60,54,-27)),    'W')
+                    ,(((-44,14,16),(24,64,38)),      'X')
+                    ,(((-36,-30,-49),(8,51,8)),      'Y')
+                    ,(((-50,32,60),(47,64,73)),      'Z')
+                    ,(((-17,47,-3),(37,63,16)),      'a')
+                    ,(((-38,27,8),(75,63,41)),       'b')
+                    ,(((-4,21,40),(26,76,42)),       'c')
+                    ,(((6,43,34),(14,44,35)),        'd')
+                    ,(((4,3,13),(32,48,62)),         'e')
+                    ,(((38,29,-47),(72,41,79)),      'f')
+                    ,(((40,41,35),(65,68,37)),       'g')
+                    ,(((-8,35,-59),(59,35,-3)),      'h')
+                    ,(((-1,51,-41),(22,67,59)),      'i')
+                    ,(((34,-21,-40),(52,54,-34)),    'j')
+                    ,(((47,44,-40),(63,52,-26)),     'k')
+                    ,(((48,34,-52),(71,82,-39)),     'l')
+                    ,(((59,42,-51),(61,81,-46)),     'm')
+                    ,(((53,43,54),(90,90,66)),       'n')
+                    ,(((-32,-22,10),(54,18,40)),     'o')
+                    ,(((-30,-3,26),(58,2,49)),       'p')
+                    ,(((19,-39,35),(43,60,36)),      'q')
+                    ,(((21,-19,28),(62,-1,30)),      'r')
+                    ,(((36,-41,31),(59,-37,36)),     's')
+                    ,(((60,-13,-15),(68,20,60)),     't')
+                    ,(((-25,-54,-22),(46,-18,32)),   'u')
+                    ,(((-12,-33,-47),(39,46,-29)),   'v')
+                    ,(((7,-29,-35),(18,-23,-30)),    'w')
+                    ,(((-1,-48,-11),(51,-42,22)),    'x')
+                    ,(((49,-31,-17),(56,-10,5)),     'y')
+                    ,(((58,-3,-28),(69,28,56)),      'z')
+                    ,(((57,-57,42),(69,36,53)),      'α')
+                    ,(((52,55,-32),(65,100,112)),    'β')
+                    ,(((58,54,28),(90,95,55)),       'γ')
+                    ]
       let t = RT.fromList objects
-          t' = mconcat [Leaf bs lbl | (bs, lbl) <- objects]
-      -- putStrLn (RT.drawTree t)
-      -- putStrLn $ RT.drawTree $ t'
-      -- length (query Overlapping ((0,0,0),(0,0,0)) t') `shouldBe` 0
-      size (insertPoint (0,0,0) 'θ' t) `shouldBe` 56
+          p = origin
+
+      length (query Precisely (p,p) t) `shouldBe` 0
+      fmap snd (query Overlapping (p,p) t) `shouldMatchList` "DLY"
+      size (insertPoint p 'θ' t) `shouldBe` length objects + 1
 
     specify "makes-queries-work" $ property $ \t i ->
       query1 i (insertPoint i () t) == [(i :: Dim3,())]
 
-    describe "sub-regions" $ do
-      let t = Region (1,10) $ NE.fromList [ Region (1,3)  $ NE.fromList [Leaf (dbl 1) (), Leaf (dbl 3) ()]
-                                          , Region (8,10) $ NE.fromList [Leaf (dbl 8) (), Leaf (dbl 10) ()]
-                                          ]
-      it "does not add a new direct child if it is contained by a sub-region" $ do
-        let t' = insertPoint (2 :: Int) () t
-        length (subregions t') `shouldBe` 2
-      it "does add a new direct child if it is not contained by a sub-region" $ do
-        let t' = insertPoint (5 :: Int) () t
-        length (subregions t') `shouldBe` 3
-
 maxPageSizeSpec = describe "maxPageSize" $ do
-    let maxRegionSize t = case t of Region _ ts -> maximum (NE.cons (length ts) (fmap maxRegionSize ts))
+    let maxRegionSize t = case t of Region _ _ ts -> maximum (NE.cons (length ts) (fmap maxRegionSize ts))
                                     _ -> 0
 
     specify "after indexing, no region is larger than the max-page-size" $ property $ \t ->
-      maxRegionSize (t :: Dim3Set) <= maxPageSize
+      maxRegionSize (t :: Dim3Set) <= maxPageSize t
     specify "after inserting, no region is larger than the max-page-size" $ property $ \(NonEmpty elems) ->
       let t = foldr (\i -> insertPoint (i :: Dim3) ()) Tip elems
-       in maxRegionSize t <= maxPageSize
+       in maxRegionSize t <= maxPageSize t
 
 nullSpec = describe "null" $ do
     specify "null lists make null trees" $ property $ \ps ->
@@ -422,21 +430,37 @@ sizeWithSpec = describe "sizeWith" $ do
     specify "is always >= extent t when adding a tree" $ property $ \t0 t1 ->
       sizeWith t0 t1 >= extent (t0 :: Dim3Set)
     specify "can calculate the new size" $ do
-      sizeWith (Leaf (dbl (9,9,9)) ()) (tree [(0,0,0),(3,1,5)]) `shouldBe` 1000
+      sizeWith (singleton (dbl (9,9,9)) ()) (tree [(0,0,0),(3,1,5)]) `shouldBe` 1000
 
 insertWithSpec = describe "insertWith" $ do
-    specify "it can operate as counting structure" $ property $ do
-      let t = L.foldl' (\t p -> RT.insertWith (+) (dbl (p :: Dim3)) (1 :: Int) t) RT.empty
-                   [(0,0,0),(0,0,1),(0,1,0),(1,2,1)
-                   ,(0,0,0),(0,0,1),(0,1,0)
-                           ,(0,0,1),(0,1,0)
-                           ,(0,0,1)
-                   ]
-      L.sort (fmap (first fst) $ assocs t) `shouldBe` L.sort [((0,0,0), 2)
-                                            ,((0,0,1), 4)
-                                            ,((0,1,0), 3)
-                                            ,((1,2,1), 1)
-                                            ]
+  let trues = fromPoints $ flip zip (repeat True) (Ix.range ((0,0), (10,10)))
+
+  specify "we can choose old values" $ do
+    let bs = dbl (5,5)
+        t = insertWith (\new old -> old) bs False trues
+
+    lookup bs t `shouldBe` Just True
+
+  specify "we can choose new values" $ do
+    let bs = dbl (5,5)
+        t = insertWith (\new old -> new) bs False trues
+
+    lookup bs t `shouldBe` Just False
+
+  specify "it can operate as counting structure" $ property $ do
+    let t = fromPointsWith (+) $ flip zip (repeat 1)
+                 [(0,0,0),(0,0,1),(0,1,0),(1,2,1)
+                 ,(0,0,0),(0,0,1),(0,1,0)
+                         ,(0,0,1),(0,1,0)
+                         ,(0,0,1)
+                 ]
+        result = first fst <$> assocs t
+
+    result `shouldMatchList` [((0,0,0), 2)
+                             ,((0,0,1), 4)
+                             ,((0,1,0), 3)
+                             ,((1,2,1), 1)
+                             ]
 
 stackOfCardsSpec = describe "stack-of-cards" $ do
     -- test that we can use an RTree where every object overlaps with every
@@ -483,7 +507,7 @@ stackOfCardsSpec = describe "stack-of-cards" $ do
                      in size t' === (size t + 1)
 
     describe "fromList" (tests $ RT.fromList cards)
-    describe "mconcat" (tests $ mconcat [Leaf bs a | (bs,a) <- cards])
+    describe "mconcat" (tests $ mconcat [singleton bs a | (bs,a) <- cards])
 
 lawsSpec = describe "Laws" $ do
   oneDBools
