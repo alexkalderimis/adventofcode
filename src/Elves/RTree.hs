@@ -6,7 +6,16 @@
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
-module Elves.RTree where
+module Elves.RTree (
+  Extendable, Queryable, QueryStrategy(..), RTree,
+  singleton, region, point, bounds, bounds', indexed, locations, assocs, elems,
+  maxPageSize, size, sizeWith, extent, null,
+  fromList, fromPoints, fromPointsWith, fromListWith, 
+  alter, delete, insert, insertPoint, insertWith, empty, union, unionWith,
+  subtrees, leaves, forest, fromTree,
+  query, member, lookup, nearestNeighbour, nearestNeighbourK, nearestNeighbours,
+  expandQuery, drawTree, diffTree, overlapping
+  ) where
 
 import           Prelude                   hiding (lookup, null)
 
@@ -38,24 +47,13 @@ import           Test.QuickCheck.Arbitrary (Arbitrary (arbitrary, shrink),
                                             arbitraryBoundedEnum)
 import           Test.QuickCheck.Gen       (chooseInt, suchThat)
 
-import           Elves.Coord (Bounds, Extent, Coord, Dimension, dimensions, straightLine, overlaps)
+import           Elves.Coord (Bounds, Extent, Coord, Dimension, expandB, dimensions, straightLine, overlaps)
 import qualified Elves.Coord as Coord
 import           Elves.Core
 
 type Extendable i = (Queryable i, Extent (Dimension i))
 
 type Queryable i =  (Coord i, Num (Dimension i), Eq (Dimension i), Ord (Dimension i))
-
-newtype ValidBounds = ValidBounds
-  { getValidBounds :: (Int,Int)
-  } deriving (Show, Eq)
-
-instance Arbitrary ValidBounds where
-  arbitrary = do
-    lb <- chooseInt (-500, 500)
-    ub <- chooseInt (lb, 500)
-
-    return (ValidBounds (lb,ub))
 
 newtype ArbitraryBounds i = ArbitraryBounds
   { arbitraryBounds :: (i, i)
@@ -335,6 +333,18 @@ leaves t = case t of
   Tip           -> []
   _             -> pure t
 
+-- obtain the full structure of the tree.
+forest :: RTree i a -> Tree.Forest (i, i, Maybe a)
+forest Tip = []
+forest (Leaf i j a)    = pure $ Tree.Node (i, j, pure a)  []
+forest (Region i j ts) = pure $ Tree.Node (i, j, Nothing) (NE.toList ts >>= forest)
+
+-- inverse of forest, exposed for testing
+fromTree :: Tree.Tree (i, i, Maybe a) -> RTree i a
+fromTree (Tree.Node (i, j, Just x) []) = Leaf j j x
+fromTree (Tree.Node (i, j, Nothing) ns) = Region i j (NE.fromList $ fmap fromTree ns)
+fromTree _ = error "Cannot restore tree"
+
 insertChild :: (Extendable i)
             => (a -> a -> a) -> Bounds i -> a
             -> NonEmpty (RTree i a) -> NonEmpty (RTree i a)
@@ -460,16 +470,9 @@ sizeWith t0 t1 = maybe 0 (uncurry Coord.size) $
       <|> bounds t0
       <|> bounds t1
 
+-- the space covered by this tree - including empty space.
 extent :: (Coord i, Extent (Dimension i)) => RTree i a -> Dimension i
 extent = fromMaybe 0 . fmap (uncurry Coord.size) . bounds
-
-expand :: (Ord (Dimension i), Coord i) => i -> (i,i) -> (i,i)
-expand i bs = foldr f bs dimensions
-  where f l = let v = i ^. runLens l
-               in over (_1.runLens l) (min v) . over (_2.runLens l) (max v)
-
-expandB :: (Ord (Dimension i), Coord i) => Bounds i -> Bounds i -> Bounds i
-expandB (i,j) = expand i . expand j
 
 boundingBox :: (HasCallStack, Ord (Dimension i), Coord i) => NonEmpty (RTree i a) -> Bounds i
 boundingBox ts = let (b :| bs) = bounds' <$> ts in L.foldl' expandB b bs
@@ -486,11 +489,9 @@ scaleQuery f q = L.foldl' go q dimensions
                           in (set (runLens dim) a lb, set (runLens dim) b ub)
 
 structure :: (Show i, Show a) => RTree i a -> Tree.Forest String
-structure t = case t of
-  Tip           -> []
-  Leaf i j a    -> node (show i <> ".." <> show j <> " => " <> show a) []
-  Region i j ts -> node (show i <> ".." <> show j) (NE.toList ts >>= structure)
- where node = (pure .) . Tree.Node
+structure = fmap (fmap f) . forest
+  where
+    f (i, j, mv) = mconcat [show i, "..", show j, maybe "" ((" => " <>) . show) mv]
 
 drawTree :: (Show i, Show a) => RTree i a -> String
 drawTree = Tree.drawForest . structure

@@ -29,52 +29,11 @@ import           Elves.RTree              hiding (null)
 import qualified Elves.RTree              as RT
 
 import Support.BoundingBoxes (Dim2, Dim3, Cube(..))
-
-type Dim3Set = RTree Dim3 ()
-
-newtype Unique a = Unique { getUnique :: [a] } deriving (Show)
-
-instance (Arbitrary a, Eq a) => Arbitrary (Unique a) where
-  arbitrary = Unique . L.nub <$> arbitrary
-
-data NNInput a = NNInput a a [a] deriving Show
-
-instance (Arbitrary a, Ord a) => Arbitrary (NNInput a) where
-  arbitrary = do
-    Unique xs <- arbitrary
-    x <- arbitrary `suchThat` (not . (`elem` xs))
-    y <- arbitrary `suchThat` (not . (`elem` (x:xs)))
-    return (NNInput x y xs)
-  shrink (NNInput a b cs) = NNInput a b <$> shrink cs
-
-query1 :: Dim3 -> Dim3Set -> [(Dim3,())]
-query1 i = fmap (first fst) . take 1 . query Within (i,i)
-
-subregions :: RTree i a -> [RTree i a]
-subregions (Region _ _ ts) = NE.toList ts
-subregions _               = []
-
-maxRegionSize :: RTree i a -> Int
-maxRegionSize t = let rs = subregions t
-                   in maximum (length rs : fmap maxRegionSize rs)
-
-tree :: [Dim3] -> Dim3Set
-tree = RT.fromList . flip zip (repeat ()) . fmap dbl
-
-depth :: RTree i a -> Int
-depth Tip             = 0
-depth Leaf{}          = 1
-depth (Region _ _ ts) = 1 + maximum (depth <$> ts)
-
-dbl :: a -> (a,a)
-dbl = (,) <$> id <*> id
-
-index' = RT.fromList . fmap (first dbl)
+import Support.RTreeSupport
 
 spec :: Spec
 spec = describe "Elves.RTree" $ do
   sizeSpec
-  expandSpec
   querySpec
   lookupSpec
   expandQuerySpec
@@ -84,6 +43,7 @@ spec = describe "Elves.RTree" $ do
   maxPageSizeSpec
   nullSpec
   deleteSpec
+  alterSpec
   sizeWithSpec
   insertWithSpec
   stackOfCardsSpec
@@ -101,10 +61,7 @@ decontructionSpec = describe "deconstruct" $ do
 sizeSpec = describe "size"
   $ it "always has the size of the elements you put in it"
   $ property $ \(Unique elems) ->
-    let t = index' elems in size (t :: Dim3Set) == length elems
-
-expandSpec = describe "expandB" $ do
-    it "is commutative" $ property $ \(Cube a) (Cube b) -> expandB a b === expandB b a
+    let t = fromPoints elems in size (t :: Dim3Set) == length elems
 
 querySpec = describe "query" $ do
     it "no-false-positives" $ property $ \e elems ->
@@ -114,7 +71,7 @@ querySpec = describe "query" $ do
       let t = tree elems
        in query1 e (insertPoint e () t) === [(e,())]
     it "no-false-negatives" $ property $ \e elems ->
-      let t = index' (e : elems)
+      let t = fromPoints (e : elems)
        in query1 (fst e) t === [e]
     describe "any strategy" $ do
       it "no-false-negatives" $ property $ \strategy e elems ->
@@ -139,8 +96,8 @@ querySpec = describe "query" $ do
           f = singleton (k 23 27) 'F'
           t = mconcat [a,b,c,d,e,f]
       let search i s      = query s i t
-          shouldFind x    = (`shouldContain` [x]) . fmap snd
-          shouldNotFind x = (`shouldNotContain` [x]) . fmap snd
+          shouldFind x    = (`shouldContain` elems x) . fmap snd
+          shouldNotFind x = (`shouldNotContain` elems x) . fmap snd
 
       consider Precisely $ do
         forM_ [a,b,c,d,e,f] $ \t -> do
@@ -151,33 +108,32 @@ querySpec = describe "query" $ do
       consider Within $ do
         forM_ [a,b,c,d,e,f] $ \t -> do
           let i = bounds' t
-              a = head (elems t)
-          which (show i <> " matches at least itself") (search i >>> shouldFind a)
-        which "finds f within d"         (search (20,30) >>> shouldFind 'F')
-        which "does not find a within d" (search (20,30) >>> shouldNotFind 'A')
-        which "finds c within a"         (search ( 0,10) >>> shouldFind 'C')
-        which "does not find b within a" (search ( 0,10) >>> shouldNotFind 'B')
-        which "does not find a within b" (search ( 5,15) >>> shouldNotFind 'A')
-        which "finds b within (0, 20)"   (search ( 0,20) >>> shouldFind 'B')
-        which "does not find d inside a" (search ( 0,10) >>> shouldNotFind 'D')
+          which (show i <> " matches at least itself") (search i >>> shouldFind t)
+        which "finds f within d"         (search (20,30) >>> shouldFind f)
+        which "does not find a within d" (search (20,30) >>> shouldNotFind a)
+        which "finds c within a"         (search ( 0,10) >>> shouldFind c)
+        which "does not find b within a" (search ( 0,10) >>> shouldNotFind b)
+        which "does not find a within b" (search ( 5,15) >>> shouldNotFind a)
+        which "finds b within (0, 20)"   (search ( 0,20) >>> shouldFind b)
+        which "does not find d inside a" (search ( 0,10) >>> shouldNotFind d)
 
       consider Overlapping $ do
         forM_ [a,b,c,d,e,f] $ \t -> do
           let i = bounds' t
-              x = head (elems t)
-          which (show i <> " matches at least itself") (search i >>> shouldFind x)
-        forM_ (pairs [a,b,c]) $ \(Leaf i j x, Leaf _ _ y) -> do
-          which ("finds " <> [y] <> " overlapping " <> [x]) (search (i,j) >>> shouldFind y)
-        forM_ (pairs [d, f]) $ \(Leaf i j x, Leaf _ _ y) -> do
-          which ("finds " <> [y] <> " overlapping " <> [x]) (search (i,j) >>> shouldFind y)
+          which (show i <> " matches at least itself") (search i >>> shouldFind t)
+        forM_ (pairs [a,b,c]) $ \(x, y) -> do
+          let k = bounds' x
+          which ("finds " <> elems y <> " overlapping " <> elems x) (search k >>> shouldFind y)
+        forM_ (pairs [d, f]) $ \(x, y) -> do
+          let k = bounds' x
+          which ("finds " <> elems y <> " overlapping " <> elems x) (search k >>> shouldFind y)
         forM_ [a,b,c,d,f] $ \t -> do
           let i = bounds' t
-              x = head (elems t)
-          which ("does not find E overlapping " <> [x]) (search i >>> shouldNotFind 'E')
-          which ("does not find " <> [x] <> " E") (search (-5, -1) >>> shouldNotFind x)
+          which ("does not find E overlapping " <> elems t) (search i >>> shouldNotFind e)
+          which ("does not find " <> elems t <> " E") (search (-5, -1) >>> shouldNotFind t)
 
     it "expanding a query never makes it less specific" $ property $ \e elems ->
-      let t = index' (e : elems)
+      let t = fromPoints (e : elems)
        in (first dbl e) `elem` query Within (expandQuery 3 $ (fst e, fst e)) (t :: Dim3Set)
     it "can find the midpoint in this line" $ do
       let p k = singleton (dbl k) ()
@@ -267,26 +223,15 @@ insertSpec = describe "insert" $ do
           size (t1 <> t2) === (size t1) + (size t2) - 1
 
     describe "counter-example-1" $ do
-      let a = Region (-2) 3 $ NE.fromList [ singleton (-2,1) False
-                                          , singleton (3,3) True
-                                          ]
-          b = Region 0 4 $ NE.fromList [ singleton (0,3) True
-                                       , singleton (0,4) False
-                                       ]
+      let a = region $ NE.fromList [ singleton (-2,1) False
+                                   , singleton (3,3) True
+                                   ]
+          b = region $ NE.fromList [ singleton (0,3) True
+                                   , singleton (0,4) False
+                                   ]
 
       specify "We can combine these regions" $ QC.within 100 $ do
         size (a <> b :: RTree Int Bool) === 4
-
-      describe "minimal-test-case" $ do
-        let mtc = compact
-                  $ Region (-2) 4
-                  $ sortKids
-                  $ insertChild pure (3,3) True
-                  $ NE.fromList
-                  $ [singleton (-2,1) False, singleton (0,3) True, singleton (0,4) False]
-
-        it "completes successfully" $ QC.within 100 $ do
-          size (mtc :: RTree Int Bool) === 4
 
     specify "nested-objects" $ QC.within 1000 $ do
       size (insertPoint (0,0,0) () $ insert ((-10,-10,-10),(10,10,10)) () RT.empty) `shouldBe` 2
@@ -397,14 +342,11 @@ insertSpec = describe "insert" $ do
       query1 i (insertPoint i () t) == [(i :: Dim3,())]
 
 maxPageSizeSpec = describe "maxPageSize" $ do
-    let maxRegionSize t = case t of Region _ _ ts -> maximum (NE.cons (length ts) (fmap maxRegionSize ts))
-                                    _ -> 0
-
-    specify "after indexing, no region is larger than the max-page-size" $ property $ \t ->
-      maxRegionSize (t :: Dim3Set) <= maxPageSize t
-    specify "after inserting, no region is larger than the max-page-size" $ property $ \(NonEmpty elems) ->
-      let t = foldr (\i -> insertPoint (i :: Dim3) ()) Tip elems
-       in maxRegionSize t <= maxPageSize t
+  specify "after indexing, no region is larger than the max-page-size" $ property $ \t ->
+    maxRegionSize (t :: Dim3Set) <= maxPageSize t
+  specify "after inserting, no region is larger than the max-page-size" $ property $ \(NonEmpty elems) ->
+    let t = foldr (\i -> insertPoint (i :: Dim3) ()) RT.empty elems
+     in maxRegionSize t <= maxPageSize t
 
 nullSpec = describe "null" $ do
     specify "null lists make null trees" $ property $ \ps ->
@@ -423,6 +365,30 @@ deleteSpec = describe "delete" $ do
     let t = tree (p:ps)
         q = dbl p
      in member q (delete q t) === False
+
+alterSpec = describe "alter" $ do
+  let points = [0..10]
+      n = length points
+      t = RT.fromPoints $ zip points (repeat 1) :: RTree Int Int
+      f ma = case ma of Nothing -> Just 1
+                        Just n -> if n == 3 then Nothing else Just (n + 1)
+
+  specify "it can insert" $ do
+    let t' = alter f (12,15) t
+    size t' `shouldBe` n + 1
+    lookup (12,15) t' `shouldBe` Just 1
+    lookup (12,15) t `shouldBe` Nothing
+
+  specify "it can modify" $ do
+    let t' = alter f (2,2) t
+    size t' `shouldBe` n
+    lookup (2,2) t' `shouldBe` Just 2
+    lookup (2,2) t `shouldBe` Just 1
+
+  specify "it can insert, modify and delete" $ do
+    let ts = take 5 $ iterate (alter f (2,2)) t
+    fmap size ts `shouldBe` [n, n, n, n - 1, n]
+    fmap (lookup (2,2)) ts `shouldBe` [Just 1, Just 2, Just 3, Nothing, Just 1]
 
 sizeWithSpec = describe "sizeWith" $ do
     specify "is always extent t when adding a Tip" $ property $ \t ->

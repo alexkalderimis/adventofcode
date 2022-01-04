@@ -216,3 +216,11 @@ setDimension dim = set (runLens dim)
 
 getDimension :: Coord a => Accessor a (Dimension a) -> a -> Dimension a
 getDimension dim = view (runLens dim)
+
+expandB :: (Ord (Dimension i), Coord i) => Bounds i -> Bounds i -> Bounds i
+expandB (i,j) = expand i . expand j
+
+expand :: (Ord (Dimension i), Coord i) => i -> (i,i) -> (i,i)
+expand i bs = foldr f bs dimensions
+  where f l = let v = i ^. runLens l
+               in over (_1.runLens l) (min v) . over (_2.runLens l) (max v)
