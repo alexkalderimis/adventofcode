@@ -13,7 +13,7 @@ module Elves.RTree (
   fromList, fromPoints, fromPointsWith, fromListWith, 
   alter, alterM, delete, insert, insertPoint, insertWith, empty, union, unionWith,
   subtrees, leaves, forest, fromTree,
-  query, member, lookup, nearestNeighbour, nearestNeighbourK, nearestNeighbours,
+  query, popQuery, member, lookup, nearestNeighbour, nearestNeighbourK, nearestNeighbours,
   expandQuery, drawTree, diffTree, overlapping
   ) where
 
@@ -73,7 +73,7 @@ instance (Ord (Dimension i), Coord i, Arbitrary (Dimension i), Arbitrary i)
 
 data RTree i a
   = Tip
-  | Leaf !i !i a
+  | Leaf   !i !i a
   | Region !i !i (NonEmpty (RTree i a))
   deriving (Functor, Generic)
 
@@ -416,6 +416,20 @@ query strat q t
   = pure ( (i, j), a )
 
   | otherwise = []
+
+-- find and remove matching values from the tree
+popQuery :: (Queryable i) => QueryStrategy -> (i,i) -> RTree i a -> ([(Bounds i, a)], RTree i a)
+popQuery strat q t
+  | Region i j ts <- t
+  , matches Overlapping (i, j) q
+  , (found, ts') <- unzip . fmap (popQuery strat q) $ NE.toList ts
+  = (concat found, untip (region $ NE.fromList ts'))
+
+  | Leaf i j a <- t
+  , matches strat (i, j) q
+  = ( pure ((i, j), a), empty )
+
+  | otherwise = ([], t)
 
 lookup :: (Queryable i) => Bounds i -> RTree i a -> Maybe a
 lookup q = fmap snd . listToMaybe . query Precisely q
