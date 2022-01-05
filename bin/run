@@ -1,5 +1,5 @@
 #!/usr/bin/env stack
--- stack --resolver lts-14.13 script --package directory --package typed-process --package bytestring
+-- stack --resolver lts-14.13 script --package directory --package typed-process --package bytestring --package optparse-applicative
 
 {-# LANGUAGE OverloadedStrings #-}
 
@@ -8,26 +8,95 @@ import System.Directory
 import System.Exit
 import System.IO
 import System.Process.Typed
+import Data.Maybe
 import qualified Data.ByteString.Lazy as BS
+import Options.Applicative hiding (action)
+
+type Cmd = ProcessConfig () () ()
+data Action = Test | PT1 | PT2 deriving (Show, Eq)
+
+data Options = Options
+  { year :: String
+  , day :: String
+  , variant :: String
+  , action :: Action
+  } deriving (Show, Eq)
+
+validDays :: [String]
+validDays = (show <$> [10..25]) <> ([1..9] >>= (\n -> [show n, '0' : show n]))
+
+mkOptions :: Maybe String -> String -> String -> Maybe Action -> Options
+mkOptions mvariant year day action = Options
+  { year = year
+  , day = day
+  , variant = fromMaybe "" mvariant
+  , action = fromMaybe Test action
+  }
+
+parseOpts :: Parser Options
+parseOpts = mkOptions
+  <$> optional (strOption (long "variant" <>
+                           metavar "SUFFIX" <>
+                           help "an optional variant to run"))
+  <*> argument parseYear (metavar "YEAR")
+  <*> argument parseDay (metavar "DAY")
+  <*> optional (argument parseAction (metavar "ACTION"))
+
+parseAction :: ReadM Action
+parseAction = eitherReader $ \s -> case s of
+  "pt1" -> pure PT1
+  "pt2" -> pure PT2
+  "test" -> pure Test
+  _ -> Left ("Cannot intepret '" <> s <> "' as an action. Expected pt1, pt2, or test")
+
+parseYear :: ReadM String
+parseYear = eitherReader $ \s ->
+  if s `elem` ["2015", "2017", "2018", "2019", "2020", "2021"]
+  then pure s
+  else Left ("You haven't done any puzzles in " <> s)
+
+parseDay :: ReadM String
+parseDay = eitherReader $ \s ->
+  if s `elem` validDays
+  then pure (take (2 - length s) "00" <> s)
+  else Left ("Invalid day: " <> s <> ". Advent runs 1-25")
 
 main :: IO ()
-main = do
-  args <- getArgs
-  case args of
-    (year : day : rst) -> do
-      let exe = year <> "/" <> day <> "/Main"
-          input = year <> "/" <> day <> "/input"
-      (exitCode, out, err) <- readProcess (proc "make" [exe])
-      case exitCode of
-        ExitSuccess -> do
-          f <- case rst of
-            ["test"] -> pure id
-            _        -> do exists <- doesFileExist input
-                           if exists
-                             then setStdin . useHandleClose <$> openFile input ReadMode
-                             else pure id
-          runProcess (f $ proc exe rst) >>= exitWith
-        _ -> BS.hPut stderr err >> exitWith exitCode 
-    _ -> die "At least two arguments expected"
+main = run =<< execParser args
+  where
+    args = info (parseOpts <**> helper)
+                (fullDesc <>
+                 progDesc "Run a given puzzle solution" <>
+                 header "run - puzzle runner")
+
+run :: Options -> IO ()
+run opts = do
+  let executable = exe opts
+  (exitCode, out, err) <- readProcess (proc "make" [executable])
+  case exitCode of
+    ExitSuccess -> do
+      f <- inputProvider opts
+      runProcess (f $ proc executable $ commandLine opts) >>= exitWith
+    _ -> BS.hPut stderr err >> exitWith exitCode 
+
+exe :: Options -> String
+exe opts = mconcat [year opts, "/", day opts, "/Main", variant opts]
+
+inputFile :: Options -> String
+inputFile opts = mconcat [year opts, "/", day opts, "/input"]
+
+inputProvider :: Options -> IO (Cmd -> Cmd)
+inputProvider opts = case action opts of
+  Test -> pure id
+  _    -> do exists <- doesFileExist (inputFile opts)
+             if exists
+             then setStdin . useHandleClose <$> openFile (inputFile opts) ReadMode
+             else pure id
+
+commandLine :: Options -> [String]
+commandLine opts = case action opts of
+  Test -> ["test"]
+  PT1 -> ["pt1"]
+  PT2 -> ["pt2"]
 
 -- vim: syntax=haskell

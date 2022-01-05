@@ -106,6 +106,7 @@ tests:
     - text
     - unordered-containers
     - random
+    - transformers
 
 benchmarks:
   aoc-benchmarks:
