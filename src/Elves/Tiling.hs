@@ -31,34 +31,83 @@ limits style r =
   where hrange = (leftEdge r, rightEdge r)
         vrange = (topEdge r, btmEdge r)
 
+-- given a region, and a set of intersections with that region, return a set
+-- of regions which cover the area not intersected with.
+--
+-- i.e. if the region is
+--  
+--  +----------+
+--  |          |
+--  |          |
+--  |          |
+--  +----------+
+--
+--  And it has intersections (//):
+--  
+--  +----------+
+--  |//|       |
+--  ---+  +----|
+--  |     |////|
+--  +----------+
+--
+--  Then we return tiles such as:
+--
+--     --------+
+--     |       |
+--  +--+-------+
+--  |     |     
+--  +-----+     
+--  
+--  tiling may produce a large number of small fragments to tessalate the space.
+--  If you are OK with many small regions, then that's fine, but if you prefer
+--  to have fewer, compact regions, then call `compactify` on the resulting set of
+--  regions
 tiles :: Bounds Location -> [Bounds Location] -> [Bounds Location]
 tiles outer [] = [outer]
-tiles outer is = if null validStartPoints then [] else largestTile : otherTiles
-  where
-    largestTile = L.maximumBy (comparing rangeSize)
-                              (validStartPoints >>= candidateTiles)
-    otherTiles = neighbours outer largestTile >>= \n ->
-                   tiles n (fmap (trim n) . filter (overlaps n) $ is)
-    validStartPoints = filter valid (corners outer ++ intersectionStartPoints)
-    candidateTiles p = [downThenRight lims p, rightThenDown lims p]
-    lims    = L.sortBy (comparing limitValue)
-              $ limits Inner outer ++ (limits Outer =<< is)
-    valid p = inRange outer p && all (\i -> not (inRange i p)) is
-    intersectionStartPoints = [right . topRight, down . btmLeft] <*> is
+tiles outer (t:ts)
+  | overlaps outer t = neighbours outer t >>= \outer' -> tiles outer' ts
+  | otherwise        = tiles outer ts
 
+splitX :: XPos -> Bounds Location -> [Bounds Location]
+splitX xpos (lb, ub)
+  | inRange (x lb, x ub) xpos = [(lb, (y ub, xpos)), ((y lb, xpos + 1), ub)]
+  | otherwise = [(lb, ub)]
+
+splitY :: YPos -> Bounds Location -> [Bounds Location]
+splitY ypos (lb, ub)
+  | inRange (y lb, y ub) ypos = [(lb, (ypos, x ub)), ((ypos + 1, x lb), ub)]
+  | otherwise = [(lb, ub)]
+
+splitRegion :: Either YPos XPos -> Bounds Location -> [Bounds Location]
+splitRegion (Left ypos) = splitY ypos
+splitRegion (Right xpos) = splitX xpos
+
+splits :: Bounds Location -> [Either YPos XPos] -> [Bounds Location]
+splits r = L.foldl' (\rs s -> rs >>= splitRegion s) [r]
+
+-- try to find neighbouring regions which can be joined, first looking LR, and then TB
 compactify :: [Bounds Location] -> [Bounds Location]
-compactify = go . L.sortBy (comparing lb)
+compactify = joinTB . joinLR . L.sortBy (comparing lb)
   where
-    go [] = []
-    go [x] = [x]
-    go (a:b:xs) =
+    joinLR [] = []
+    joinLR [x] = [x]
+    joinLR (a:b:xs) =
       let tra = topRight a
           tlb = topLeft b
           bra = btmRight a
           blb = btmLeft b
        in if (tra == left tlb) && (bra == left blb)
-             then compactify ((lb a, ub b) : xs)
-             else a : compactify (b : xs)
+             then joinLR ((lb a, ub b) : xs)
+             else a : joinLR (b : xs)
+
+    joinTB [] = []
+    joinTB [x] = [x]
+    joinTB (a:xs) = let bla = btmLeft a
+                        bra = btmRight a
+                        joins r = topLeft r == down bla && topRight r == down bra
+                     in case L.partition joins xs of
+                          ((b:bs), rst) -> joinTB ((lb a, ub b) : bs <> rst)
+                          (_, rst) -> a : joinTB rst
 
 -- preconditions: lims is sorted ascending, and contains a value greater than
 -- any input
@@ -131,24 +180,34 @@ trim a b = ((max (topEdge a) (topEdge b), max (leftEdge a) (leftEdge b))
 --    Left     Inner       Right
 --    margin   width       margin
 --
+-- Returned regions are all fully contained in the outer region.
 neighbours :: Bounds Location -> Bounds Location -> [Bounds Location]
-neighbours outer inner = fmap snd (namedNeighbours outer inner)
+neighbours outer inner | outer == inner = []
+neighbours outer inner | not (overlaps outer inner) = []
+neighbours outer inner = fmap snd $ namedNeighbours outer inner
 
-namedNeighbours outer inner = concat [tl, l_, bl, t_, b_, tr, r_, br]
+namedNeighbours :: Bounds Location -> Bounds Location -> [(String, Bounds Location)]
+namedNeighbours outer overlay = concat [tl, cl, bl, tc, bc, tr, cr, br]
   where
-    tl = fmap ((,) "TL") [ (α,α') | leftMarginExists && topMarginExists ]
-    t_ = fmap ((,) "T")  [ (β,β') | topMarginExists ]
-    tr = fmap ((,) "TR") [ (γ,γ') | topMarginExists && rightMarginExists ]
-    l_ = fmap ((,) "L")  [ (δ,δ') | leftMarginExists ]
-    r_ = fmap ((,) "R")  [ (ε,ε') | rightMarginExists ]
-    bl = fmap ((,) "BL") [ (ζ,ζ') | leftMarginExists && bottomMarginExists ]
-    b_ = fmap ((,) "B")  [ (η,η') | bottomMarginExists ]
-    br = fmap ((,) "BR") [ (θ,θ') | bottomMarginExists && rightMarginExists ]
+    tl = aka "TL" [ (α,α') | leftMarginExists && topMarginExists ]
+    tc = aka "T"  [ (β,β') | topMarginExists ]
+    tr = aka "TR" [ (γ,γ') | topMarginExists && rightMarginExists ]
+
+    cl = aka "L"  [ (δ,δ') | leftMarginExists ]
+    cr = aka "R"  [ (ε,ε') | rightMarginExists ]
+
+    bl = aka "BL" [ (ζ,ζ') | leftMarginExists && bottomMarginExists ]
+    bc = aka "B"  [ (η,η') | bottomMarginExists ]
+    br = aka "BR" [ (θ,θ') | bottomMarginExists && rightMarginExists ]
 
     leftMarginExists   = leftEdge outer  < leftEdge inner
     topMarginExists    = topEdge outer   < topEdge inner
     rightMarginExists  = rightEdge inner < rightEdge outer
     bottomMarginExists = btmEdge inner   < btmEdge outer
+
+    inner = trim outer overlay
+
+    aka name = fmap ((,) name)
 
     -- the points themselves
     α  = topLeft outer
@@ -183,6 +242,10 @@ width = (+ 1) . liftA2 subtract rightEdge leftEdge
 corners :: Bounds Location -> [Location]
 corners bs = fmap ($ bs) [topLeft, topRight, btmRight, btmLeft]
 
+edges :: Bounds Location -> [Bounds Location]
+edges bs = fmap (\(lb, ub) -> (lb bs, ub bs))
+           [(topLeft, topRight), (topLeft, btmLeft), (btmLeft, btmRight), (topRight, btmRight)]
+
 leftEdge :: Bounds Location -> XPos
 leftEdge = x . lb
 
@@ -212,9 +275,3 @@ lb = fst
 
 ub :: Bounds Location -> Location
 ub = snd
-
-x :: Location -> Int
-x = snd
-
-y :: Location -> Int
-y = fst

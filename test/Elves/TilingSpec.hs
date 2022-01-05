@@ -4,7 +4,7 @@ import Data.Ix
 import Data.Ord
 import qualified Data.List as L
 import Control.Lens.Combinators (none)
-import qualified Data.Set as S
+import qualified Data.Map as M
 
 import Test.Hspec
 import Test.QuickCheck hiding (scale, NonZero, within)
@@ -12,40 +12,95 @@ import Test.QuickCheck hiding (scale, NonZero, within)
 import Elves.Coord hiding (corners)
 import Elves.Cartesian
 import Elves.Tiling
+import qualified Elves.CountMap as CM
 
-data NeighbourInput = NeighbourInput (Bounds Location) (Bounds Location)
-  deriving (Show, Eq)
-
-data TileInput = TileInput (Bounds Location) [Bounds Location]
-  deriving (Show, Eq)
-
-arbBox minx maxx miny maxy = do
-  tly <- choose (miny, maxy)
-  tlx <- choose (minx, maxx)
-  bly <- choose (tly, maxy)
-  blx <- choose (tlx, maxx)
-  pure ((tly,tlx),(bly,blx))
-
-instance Arbitrary NeighbourInput where
-  arbitrary = do
-    outer <- arbBox 0 999 0 999
-    inner <- arbBox (x $ lb outer) (x $ ub outer) (y $ lb outer) (y $ ub outer)
-
-    return (NeighbourInput outer inner)
-
-instance Arbitrary TileInput where
-  arbitrary = do
-    outer <- arbBox 0 1000 0 1000
-    let inner = arbBox (x $ lb outer) (x $ ub outer) (y $ lb outer) (y $ ub outer)
-    is <- listOf1 inner
-    pure (TileInput outer (dedup is))
-    where
-      dedup = L.nubBy overlaps
+import Support.TilingSupport (splitOf, xSplitOf, ySplitOf, NeighbourInput(..), TileInput(..))
+import Support.BoundingBoxes (Region(..))
 
 spec :: Spec
 spec = describe "Elves.Tiling" $ do
   tilesSpec
   neighboursSpec
+  compactifySpec
+  splitsSpec
+
+splitsSpec = describe "splitting" $ do
+  let r = ((-100, -100), (100, 100))
+      small = ((-10, -10), (10, 10))
+
+  --  +-----------+
+  --  |--------|--|
+  --  |   |  | |  |
+  --  |---|--|-|--|
+  --  |   |  | |  |
+  --  |------|-|--|
+  --  |   |  | |  |
+  --  +-----------+
+  --  0 = 1
+  --  1 = 2
+  --  2 = 4
+  --  3 = 6
+  --  4 = 9
+  --  5 = 12
+  --  6 = 16
+  it "increases the number of regions by this sequence, if splits alternate" $
+    forAll (ySplitOf r)                    $ \s0 ->
+    forAll (xSplitOf r)                    $ \s1 ->
+    forAll (ySplitOf r `suchThat` (/= s0)) $ \s2 ->
+    forAll (xSplitOf r `suchThat` (/= s1)) $ \s3 -> do
+      let divisions = [s0, s1, s2, s3]
+      let rs = splits r divisions
+      length rs `shouldBe` 9
+
+  it "adds a new item each time, if splits are in the same direction, Y" $
+    forAll (L.nub <$> listOf (ySplitOf r)) $ \divisions -> do
+      let rs = splits r divisions
+      length rs `shouldBe` 1 + length divisions
+
+  it "adds a new item each time, if splits are in the same direction, X" $
+    forAll (L.nub <$> listOf (xSplitOf r)) $ \divisions -> do
+      let rs = splits r divisions
+      length rs `shouldBe` 1 + length divisions
+
+  -- use the smaller region for speed
+  it "does not change coverage" $
+    forAll (L.nub <$> vectorOf 5 (splitOf small)) $ \divisions -> do
+      let rs = splits small divisions
+      CM.fromList (rs >>= range) `shouldBe` CM.fromList (range small)
+
+  it "splits along the Y axis" $
+    forAll (ySplitOf r) $ \s -> do
+      let rs = splitRegion s r
+      L.nub (leftEdge <$> rs) `shouldBe` [leftEdge r]
+      L.nub (rightEdge <$> rs) `shouldBe` [rightEdge r]
+
+  it "splits along the X axis" $
+    forAll (xSplitOf r) $ \s -> do
+      let rs = splitRegion s r
+      L.nub (topEdge <$> rs) `shouldBe` [topEdge r]
+      L.nub (btmEdge <$> rs) `shouldBe` [btmEdge r]
+
+compactifySpec = describe "compactify" $ do
+  describe "recursively splitting a region and then compacting it" $ do
+    let r = ((0,0), (100, 100))
+        divisions = [Left 50, Right 25, Left 70, Right 10]
+        rs = splits r divisions
+    it "restores the original region" $ do
+      compactify rs `shouldBe` [r]
+
+  describe "compactify of neighbours" $ do
+
+    it "can produce at most 4 regions" $ do
+      let outer = ((0,0), (100,100))
+          inner = ((20,20), (80,80))
+          ns = neighbours outer inner
+      length (compactify ns) `shouldBe` 4
+
+    it "produces regions that are identical in coverage to the input" $ do
+      property $ \(NeighbourInput outer inner) -> do
+        let ns = neighbours outer inner
+            ns' = compactify ns
+        (ns >>= range) `shouldMatchList` (ns' >>= range)
 
 tilesSpec = describe "tiles" $ do
 
@@ -71,37 +126,38 @@ tilesSpec = describe "tiles" $ do
                ,((12,0),(20,7))
                ,((16,12),(22,18))
                ]
-      --- 0000000000111111111122222
-      --- 0123456789012345678901234
-      --  //////|-----------------+ 00
-      --  //////| .   .     .     | 01
-      --  //////| .   .     .     | 02
-      --  //////|.+...+.....+------ 03
-      --  ------+.+...+.....|////// 04
-      --  |     . .   .     |////// 05
-      --  |     . .   .     |////// 06
-      --  |     . .   .     |////// 07
-      --  |     . .   .     |////// 08
-      --  |     . .   .     |////// 09
-      --  |.....+.+...+.... +------ 10
-      --  |     . .   .     .     | 11
-      --  --------+...+.....+.....| 12
-      --  ////////|   .     .     | 13
-      --  ////////|   .     .     | 14
-      --  ////////|   .     .     | 15
-      --  ////////|...+-----+.....| 16
-      --  ////////|   |/////|     | 17
-      --  ////////|   |/////|     | 18
-      --  ////////|   |/////|     | 19
-      --  --------+...|/////|.....| 20
-      --  |     . .   |/////|     | 21
-      --  |.....+.+...+-----+.....| 22
-      --  |     . .   .     .     | 23
-      --  |     . .   .     .     | 24
-      --  |     . .   .     .     | 25
-      --  +-----------------------+ 26
+
+      --  // = intersection
+      --  .. = tile
+      --  ┌─────┐┌┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┐
+      --  │/////│┊................┊
+      --  │/////│└┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┘
+      --  │/////│┌┈┈┈┈┈┈┈┈┈┐┌─────┐
+      --  └─────┘┊.........┊│/////│
+      --  ┌┈┈┈┈┈┐┊.........┊│/////│
+      --  ┊.....┊┊.........┊│/////│
+      --  ┊.....┊┊.........┊│/////│
+      --  ┊.....┊┊.........┊│/////│
+      --  ┊.....┊┊.........┊│/////│
+      --  ┊.....┊┊.........┊└─────┘
+      --  └┈┈┈┈┈┘└┈┈┈┈┈┈┈┈┈┘┌┈┈┈┈┈┐
+      --  ┌──────┐┌┈┈┈┈┈┈┈┈┐┊.....┊
+      --  │//////│┊........┊┊.....┊
+      --  │//////│┊........┊┊.....┊
+      --  │//////│└┈┈┈┈┈┈┈┈┘└┈┈┈┈┈┘
+      --  │//////│┌┈┈┐┌─────┐┌┈┈┈┈┐
+      --  │//////│┊..┊│/////│┊....┊
+      --  │//////│┊..┊│/////│┊....┊
+      --  │//////│┊..┊│/////│┊....┊
+      --  └──────┘┊..┊│/////│┊....┊
+      --  ┌┈┈┈┈┈┈┐┊..┊│/////│┊....┊
+      --  ┊......┊└┈┈┘└─────┘└┈┈┈┈┘
+      --  ┊......┊┌┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┐
+      --  ┊......┊┊...............┊
+      --  ┊......┊┊...............┊
+      --  └┈┈┈┈┈┈┘└┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┘
       it "creates the correct number of tiles" $ do
-        length (tiles outer is) `shouldBe` 12
+        length (compactify $ tiles outer is) `shouldBe` 9
 
     specify "all tiles are in the outer"
       $ property $ \(TileInput outer is) ->
@@ -161,50 +217,11 @@ neighboursSpec = describe "neighbours" $ do
       let ns = namedNeighbours outer inner
           os = rangeSize outer
           max_n_size = L.maximumBy (comparing (rangeSize . snd)) ns
-       in counterexample (unwords [show os, "<=", show max_n_size])
-                         (os > rangeSize (snd max_n_size))
+       in not (null ns) ==> counterexample (unwords [show os, "<=", show max_n_size])
+                                           (os > rangeSize (snd max_n_size))
 
   it "accounts for all the locations"
     $ property $ \(NeighbourInput outer inner) ->
       let ns = neighbours outer inner
        in rangeSize outer === sum (rangeSize <$> inner : ns)
 
-showTiles :: Bounds Location -> [Bounds Location] -> [Bounds Location] -> String
-showTiles outer intersections tiles
-  = unlines $ fmap row [topEdge outer .. btmEdge outer]
-  where
-    accounted_for = intersections ++ tiles
-    all_corners = S.fromList ((outer : intersections ++ tiles) >>= corners)
-    solid_edges_hr = (outer : intersections) >>= \r -> [(topLeft r, topRight r)
-                                                       ,(btmLeft r, btmRight r)
-                                                       ]
-    solid_edges_vt = (outer : intersections) >>= \r -> [(topLeft r, btmLeft r)
-                                                       ,(topRight r, btmRight r)
-                                                       ]
-    tile_edges = tiles >>= \r -> [(topLeft r, btmLeft r)
-                                 ,(topRight r, btmRight r)
-                                 ,(topLeft r, topRight r)
-                                 ,(btmLeft r, btmRight r)
-                                 ]
-    row y = fmap (cell y) [leftEdge outer .. rightEdge outer]
-    cell y x
-       | none (\r -> inRange r (y,x)) accounted_for = '?'
-       | S.member (y,x) all_corners                 = '+'
-       | any (\e -> inRange e (y,x)) solid_edges_hr = '-'
-       | any (\e -> inRange e (y,x)) solid_edges_vt = '|'
-       | any (\i -> inRange i (y,x)) intersections  = '/'
-       | any (\e -> inRange e (y,x)) tile_edges     = '.'
-       | any (\t -> inRange t (y,x)) tiles          = ' '
-       | otherwise                                  = '!'
-
-
-runExample = do
-      let outer = ((0,0),(26,24))
-          is = [((0,16),(3,24))
-               ,((0,0),(4,6))
-               ,((3,18),(10,24))
-               ,((12,0),(20,7))
-               ,((16,12),(22,18))
-               ]
-          ts = tiles outer is
-      putStrLn (showTiles outer is (compactify ts))

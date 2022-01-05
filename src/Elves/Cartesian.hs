@@ -1,5 +1,6 @@
 module Elves.Cartesian where
 
+-- a point on a 2D integral cartestian place as (Y,X)
 type Location = (Int, Int)
 data Direction = North | East | South | West deriving (Show, Eq, Bounded, Enum)
 
@@ -20,6 +21,12 @@ up    = move North 1
 down  = move South 1
 right = move East 1
 left  = move West 1
+
+x :: Location -> Int
+x = snd
+
+y :: Location -> Int
+y = fst
 
 move :: Direction -> Int -> Location -> Location
 move North n = translate (negate n, 0)

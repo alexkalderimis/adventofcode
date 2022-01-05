@@ -11,7 +11,7 @@ module Elves.RTree (
   singleton, region, point, bounds, bounds', indexed, locations, assocs, elems,
   maxPageSize, size, sizeWith, extent, null,
   fromList, fromPoints, fromPointsWith, fromListWith, 
-  alter, delete, insert, insertPoint, insertWith, empty, union, unionWith,
+  alter, alterM, delete, insert, insertPoint, insertWith, empty, union, unionWith,
   subtrees, leaves, forest, fromTree,
   query, member, lookup, nearestNeighbour, nearestNeighbourK, nearestNeighbours,
   expandQuery, drawTree, diffTree, overlapping
@@ -28,6 +28,7 @@ import           Data.Foldable             (Foldable (foldMap))
 import qualified Data.Foldable             as F
 import           Data.Function             (on)
 import           Data.Functor.Classes      (Eq1 (..), Eq2 (..))
+import           Data.Functor.Identity     (Identity(..))
 import           Data.Hashable             (Hashable)
 import           Data.Heap                 (Entry (..), Heap)
 import qualified Data.Heap                 as Heap
@@ -256,18 +257,30 @@ delete = alter (pure Nothing)
 -- edit a value in place, with the option to insert/delete
 alter :: (Extendable i)
       => (Maybe a -> Maybe a) -> Bounds i -> RTree i a -> RTree i a
-alter f k t = case t of
-  Leaf lb ub a | k == (lb, ub) -> case f (Just a) of
-                                    Nothing -> Tip
-                                    Just x -> singleton k x
-  Region lb ub ts -> case NE.partition (includes k) ts of
-                                     ([], _) -> case f Nothing of
-                                                  Just x -> insert k x t
-                                                  Nothing -> t
-                                     (xs, ys) -> let lhs = untip $ alter f k (mconcat xs)
-                                                     rhs = mconcat ys
-                                                  in lhs <> rhs
-  _ -> t <> maybe Tip (singleton k) (f Nothing)
+alter f k = runIdentity . alterM (Identity . f) k
+
+-- edit a value in place, with the option to insert/delete, using a monadic context
+alterM :: (Extendable i, Monad m)
+       => (Maybe a -> m (Maybe a)) -> Bounds i -> RTree i a -> m (RTree i a)
+alterM f k t
+  | Leaf lb ub a <- t
+  , k == (lb, ub)
+  = maybeTree <$> f (Just a)
+
+  | Region lb ub ts <- t
+  , (xs, ys)        <- NE.partition (includes k) ts
+  , (here, there)   <- L.partition (member k) xs
+  = case (here, there <> ys) of
+      ([], _)    -> maybeInsert <$> f Nothing
+      ([x], ts') -> do x' <- untip <$> alterM f k x
+                       pure $ region (x' :| ts')
+      _ -> error "Illegal tree: key must be member of unique path"
+
+  | otherwise = maybeTree <$> f Nothing
+
+  where
+    maybeTree = maybe Tip (singleton k)
+    maybeInsert = maybe t (\x -> insert k x t)
 
 -- remove all tips from within the top level of the tree, and resize if needed.
 untip :: (Ord (Dimension i), Coord i) => RTree i a -> RTree i a

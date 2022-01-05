@@ -11,6 +11,7 @@ import           Control.Concurrent       (threadDelay)
 import qualified Control.Concurrent.Async as Async
 import           Control.Exception.Base   (Exception)
 import           Control.Lens             hiding (index, equality)
+import           Control.Monad.Trans.Writer.CPS (Writer, runWriter, tell)
 import qualified Data.Foldable            as F
 import           Data.Functor.Compose
 import qualified Data.Ix                  as Ix
@@ -28,7 +29,7 @@ import           Elves.LawsSpec
 import           Elves.RTree              hiding (null)
 import qualified Elves.RTree              as RT
 
-import Support.BoundingBoxes (Dim2, Dim3, Cube(..))
+import Support.BoundingBoxes (Dim2, Dim3, Cube(..), Range(..))
 import Support.RTreeSupport
 
 spec :: Spec
@@ -367,7 +368,7 @@ deleteSpec = describe "delete" $ do
      in member q (delete q t) === False
 
 alterSpec = describe "alter" $ do
-  let points = [0..10]
+  let points = [0..10] <> [100..500]
       n = length points
       t = RT.fromPoints $ zip points (repeat 1) :: RTree Int Int
       f ma = case ma of Nothing -> Just 1
@@ -389,6 +390,37 @@ alterSpec = describe "alter" $ do
     let ts = take 5 $ iterate (alter f (2,2)) t
     fmap size ts `shouldBe` [n, n, n, n - 1, n]
     fmap (lookup (2,2)) ts `shouldBe` [Just 1, Just 2, Just 3, Nothing, Just 1]
+
+  describe "calling alterM in a monadic context" $ do
+    let f mv = do tell [mv]
+                  case mv of Nothing -> pure (Just 1)
+                             Just n -> pure (Just (n + 1))
+
+    specify "it calls the function no more than once" $
+      property $ \points (Range p) -> do
+        let t = RT.fromListWith (+) [ (getRange p, 1 :: Int) | p <- points ]
+            (t', values) = runWriter (RT.alterM f p t)
+            prev = RT.lookup p t
+            curr = fromMaybe 0 $ RT.lookup p t'
+
+        curr `shouldBe` fromMaybe 0 prev + 1
+        values `shouldBe` [prev]
+
+  specify "it handles multiple including regions/leaves, 1D" $ do
+    let p = (5, 10) :: Bounds Int
+        t = RT.fromList [ ((0, 10), "abc")
+                        , (p,       "def")
+                        , ((5, 20), "ghi")
+                        ]
+    elems (alter (fmap tail) p t) `shouldMatchList` ["abc", "ef", "ghi"]
+
+  specify "it handles multiple including regions/leaves, 2D" $ do
+    let p = ((5, 0), (10, 0)) :: Bounds Dim2
+        t = RT.fromList [ (((0, 0), (10, 0)), "abc")
+                        , (p, "def")
+                        , (((5, 0), (20, 0)), "ghi")
+                        ]
+    elems (alter (fmap tail) p t) `shouldMatchList` ["abc", "ef", "ghi"]
 
 sizeWithSpec = describe "sizeWith" $ do
     specify "is always extent t when adding a Tip" $ property $ \t ->
