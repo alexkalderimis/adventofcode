@@ -24,9 +24,11 @@ import           Test.QuickCheck         (Arbitrary (..), choose, listOf1,
 
 import           Elves.Cartesian
 import           Elves.Tiling
-import           Elves.Coord             (Bounds, overlaps, within)
-import           Elves.RTree             (QueryStrategy (..), RTree, delete, query)
+import           Elves.Coord             (Bounds, overlaps)
+import           Elves.RTree             (QueryStrategy (..), RTree, delete, popQuery)
 import qualified Elves.RTree             as RT
+
+import Debug.Trace
 
 data Lit = On | Off deriving (Show, Eq)
 
@@ -37,11 +39,21 @@ type Commands = [(Bounds Location, Command)]
 type HouseLights = RTree Location Int
 type LightRegion = (Bounds Location, Int)
 
+-- A naive top-down simulation.
+--
+-- Each command is applied in turn, resulting in a state (HouseLights) that reflects the
+-- state of the lights after each command, representing squre regions in the same state.
+--
+-- pt1 and pt2 take about 275sec.
+--
+-- Positives: fairly close to the description, making it easy to follow, and the naive approach
+-- means that the same method can be applied to both parts. 275s is slow, but obviously much 
+-- shorter than the time spent on improving it. Times are consistent between parts.
 main :: IO ()
 main = day 6 parser pt1 pt2 test
   where
-    pt1 = print . countLit
-    pt2 = print . getBrightness
+    pt1 = print . brightnessOf . countLit
+    pt2 = print . brightnessOf . getBrightness
 
 -- turn off 199,133 through 461,193
 -- toggle 322,558 through 977,958
@@ -97,31 +109,44 @@ exampleInput = T.unlines
   ,"turn off 499,499 through 500,500"
   ]
 
-applyCommands :: (Command -> Int -> Int) -> Commands -> Int
-applyCommands value
-  = sum . fmap (\(bs, n) -> rangeSize bs * n) . RT.indexed . L.foldl' go mempty
+applyCommands :: (Command -> Int -> Int) -> Commands -> HouseLights
+applyCommands value = L.foldl' go mempty
   where
-    go t (bs, cmd) = case query Overlapping bs t of
-      [] -> RT.insert bs (value cmd 0) (t :: HouseLights)
-      regions -> let (intersections, rest) = fmap concat
+    go :: HouseLights -> (Bounds Location, Command) -> HouseLights
+    go t (bs, cmd) = traceShow ("Applying command", bs, cmd) $
+      let (regions, t') = popQuery Overlapping bs t
+       in case regions of
+            [] -> RT.insert bs (value cmd 0) t'
+            _  -> let (intersections, rest) = fmap concat
                                            . unzip
                                            . fmap (applyOverlay value bs cmd)
-                                           $ (regions :: [LightRegion])
+                                           $ regions
 
-                     fillers = [(k, value cmd 0) | k <- tiles bs (fst <$> intersections)]
-                  in L.foldl' (\t (k,v) -> RT.insert k v t)
-                              (foldr delete t (fst <$> regions))
-                              (intersections <> rest <> fillers)
+                      fillers = [(k, value cmd 0) | k <- compactify (tiles bs (fst <$> intersections))]
+                      newRegions = intersections <> rest <> fillers
+                  in traceShow ("Inserting " <> show (length newRegions) <> " new regions. " <>
+                                show (length intersections) <> " intersections, " <>
+                                show (length rest) <> " existing, " <>
+                                show (length fillers) <> " fillers.")
+                     $ L.foldl' (\t (k,v) -> RT.insert k v t) t' newRegions
 
-applyOverlay :: (Command -> Int -> Int)
-             -> Bounds Location -> Command -> LightRegion
-             -> (LightRegion, [LightRegion])
+brightnessOf :: HouseLights -> Int
+brightnessOf = getSum . foldMap (Sum . luminosity) . RT.indexed
+
+luminosity :: (Bounds Location, Int) -> Int
+luminosity (bs, n) = rangeSize bs * n
+
+-- apply a command at a location to a region, returning the region the command applies to,
+-- along with all the section of that region that the command does not apply to.
+applyOverlay :: (Command -> Int -> Int) -> Bounds Location -> Command
+             -> LightRegion -> (LightRegion, [LightRegion])
 applyOverlay value bs cmd (bs', n) =
   let intersection = trim bs bs'
-      ns = neighbours bs' intersection
-   in ((intersection, value cmd n), [(bs, n) | bs <- ns])
+      split = [(bs, n) | bs <- compactify (neighbours bs' intersection)]
+      applied = (intersection, value cmd n)
+   in (applied, split)
 
-countLit :: Commands -> Int
+countLit :: Commands -> HouseLights
 countLit = applyCommands value
   where
     value Toggle 0     = 1
@@ -129,9 +154,7 @@ countLit = applyCommands value
     value (Turn On) _  = 1
     value (Turn Off) _ = 0
 
--- use an Endo Int to model the transformations along a path
--- throught the overlays.
-getBrightness :: Commands -> Int
+getBrightness :: Commands -> HouseLights
 getBrightness = applyCommands value
   where
     value Toggle     n = n + 2
