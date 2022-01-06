@@ -9,3 +9,4 @@ adventofcode.cabal
 .last-lib-build
 dist-newstyle
 .ghc.environment.*
+build/
