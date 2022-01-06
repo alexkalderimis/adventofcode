@@ -9,6 +9,7 @@ import System.Exit
 import System.IO
 import System.Process.Typed
 import Data.Maybe
+import qualified Data.List as L
 import qualified Data.ByteString.Lazy as BS
 import Options.Applicative hiding (action)
 
@@ -80,7 +81,7 @@ run opts = do
     _ -> BS.hPut stderr err >> exitWith exitCode 
 
 exe :: Options -> String
-exe opts = mconcat [year opts, "/", day opts, "/Main", variant opts]
+exe opts = L.intercalate "_" $ filter (not . null) ["build/puzzle", year opts, day opts, variant opts]
 
 inputFile :: Options -> String
 inputFile opts = mconcat [year opts, "/", day opts, "/input"]

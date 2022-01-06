@@ -1,0 +1,19 @@
+#!/usr/bin/env stack
+-- stack --resolver lts-14.13 script --package split
+
+import System.Environment
+import System.IO
+import Data.List.Split
+import Data.List (intercalate)
+
+main :: IO ()
+main = do
+  args <- getArgs
+  case args of
+    [name] -> case splitOn "_" name of
+                ["build/puzzle", year, day] -> putStrLn (year ++ "/" ++ day ++ "/Main.hs")
+                ["build/puzzle", year, day, variant] -> putStrLn (year ++ "/" ++ day ++ "/Main" ++ variant ++ ".hs")
+                _ -> hPutStrLn stderr ("Cannot determine source of " ++ name)
+    _ -> hPutStrLn stderr ("Bad arguments: " ++ intercalate " " args)
+
+-- vim: syntax=haskell
