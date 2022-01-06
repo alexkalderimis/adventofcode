@@ -7,12 +7,13 @@ to any other solutions, and aim at clarity and performance.
 
 ## Running the solutions:
 
-To run a specific day, use the `bin/run` script:
+To run a specific day, use the `adventofcode` executable, ideally from
+`stack run`:
 
 ```bash
-./bin/run 2021 05 test
-./bin/run 2021 05 pt1
-./bin/run 2021 05 pt2
+stack run 2021 05 test
+stack run 2021 05 pt1
+stack run 2021 05 pt2
 ```
 
 ## REPL orientated development:

@@ -61,8 +61,8 @@ executables:
     - -rtsopts
     - -with-rtsopts=-N
     dependencies:
-    - cryptonite
     - adventofcode
+    - cryptonite
     - psqueues
     - array
     - containers
@@ -82,10 +82,14 @@ executables:
     - bytestring
     - lens
     - optparse-generic
+    - optparse-applicative
     - transformers
     - parallel
     - pretty
     - parser-combinators
+    - typed-process
+    - bytestring
+    - directory
 
 tests:
   adventofcode-test:

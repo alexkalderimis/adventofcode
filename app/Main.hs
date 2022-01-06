@@ -1,6 +1,3 @@
-#!/usr/bin/env stack
--- stack --resolver lts-14.13 script --package directory --package typed-process --package bytestring --package optparse-applicative
-
 {-# LANGUAGE OverloadedStrings #-}
 
 import System.Environment
