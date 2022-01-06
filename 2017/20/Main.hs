@@ -1,12 +1,11 @@
 {-# LANGUAGE OverloadedStrings #-}
 
+import           Control.Arrow
 import           Control.Lens
 import           Control.Monad
 import           Data.Attoparsec.Text    (decimal, letter, signed)
-import qualified Data.List               as L
-import qualified Data.Map.Merge.Strict   as M
-import           Data.Map.Strict         (Map)
-import qualified Data.Map.Strict         as M
+import qualified Data.List.Extra         as L
+import qualified Data.IntMap.Strict      as M
 import           Data.Maybe
 import           Data.Ord
 import qualified Data.Text               as Text
@@ -20,39 +19,50 @@ import           Elves.RTree             (RTree)
 import qualified Elves.RTree             as RT
 
 type Point = (Int,Int,Int)
+type ParticleID = Int
 
-data Particle = Particle { pos :: Point, vol :: Point, acc :: Point }
-  deriving (Show, Eq)
+data Particle = Particle
+  { pid :: !ParticleID
+  , pos :: !Point
+  , vol :: !Point
+  , acc :: !Point
+  } deriving (Show, Eq)
 
 main :: IO ()
-main = day 20 (zip [0..] <$> parser) pt1 pt2 test
+main = day 20 parser pt1 pt2 test
   where
     -- the particle that stays closest is the one with the minimum acceleration
-    pt1 sys = print $ L.minimumBy (comparing (manhattan (0,0,0) . acc . snd)) sys
+    pt1 sys = print $ L.minimumBy (comparing (manhattan origin . acc)) sys
 
 -- no more collisions are possible when no particles are going to invert
 -- and all particles are getting further away from each other
-pt2 sys = runTilInversion $ M.fromList [(pos pnt, (pid, pnt)) | (pid, pnt) <- sys]
+pt2 = runTilInversion 0
   where
-    runTilInversion sys = do
+    runTilInversion n sys = do
       -- putStrLn $ "pt2-a: " ++ show ( M.size sys)
       let sys' = tickColliding sys
-       in if any (willInvert . snd) sys'
-          then runTilInversion sys'
-          else runWhileApproaching sys' (M.fromList [(pid, []) | pid <- fst <$> M.elems sys'])
-    runWhileApproaching sys dists = do
+       in if any willInvert sys'
+          then runTilInversion (n + 1) sys'
+          else putStrLn ("Starting runWhileApproaching after " <> show n <> " ticks")
+               >> runWhileApproaching 0 sys' (M.fromAscList [(pid p, []) | p <- sys'])
+    runWhileApproaching n sys history = do
       -- putStrLn $ "pt2-b: " ++ show (M.size sys)
       let sys'   = tickColliding sys
-          t      = RT.index [(pos, ()) | pos <- M.keys sys']
-          d  pos = maybeToList . fmap (measure pos . fst)
-                               $ RT.nearestNeighbour measure pos t
-          ds pid = join . maybeToList $ M.lookup pid dists
-          dists' = M.fromList [(pid, d (pos pnt) ++ ds pid) | (pid,pnt) <- M.elems sys']
-      if M.size dists' < 2 || all receding dists'
-         then print (M.size sys')
-         else runWhileApproaching sys' dists'
+          t      = RT.fromPoints $ zip (pos <$> sys') (repeat ())
+          d      = fromJust . distanceToNearest t
+          dists' = M.fromAscList [ (pid p, d (pos p) : history M.! pid p) | p <- sys' ]
+      if length sys' < 2 || all receding dists'
+         then do putStrLn ("All receding after " <> show n <> " ticks")
+                 print (length sys')
+         else runWhileApproaching (n + 1) sys' dists'
     receding (a:b:_) = a >= b
     receding _       = False
+
+distanceToNearest :: RTree Point () -> Point -> Maybe Double
+distanceToNearest t p = measure p . foundPoint <$> RT.nearestNeighbour measure p t
+  where
+    foundPoint :: (Bounds Point, ()) -> Point
+    foundPoint = fst . fst
     measure :: Point -> Point -> Double
     measure = straightLine
 
@@ -60,8 +70,8 @@ test = do
   describe "example system" $ do
     let msys = parseOnly parser exampleSystem
     it "parsed correctly" $ do
-      msys `shouldBe` Right [Particle (3,0,0) (2,0,0) (-1,0,0)
-                            ,Particle (4,0,0) (0,0,0) (-2,0,0)
+      msys `shouldBe` Right [Particle 0 (3,0,0) (2,0,0) (-1,0,0)
+                            ,Particle 1 (4,0,0) (0,0,0) (-2,0,0)
                             ]
     it "ticks correctly" $ do
       let (Right sys) = msys
@@ -71,11 +81,12 @@ test = do
         let (Right sys) = msys
         fmap willInvert sys `shouldBe` [True,False]
 
-parser = particle `sepBy1` newline
+parser = fmap identify (particle `sepBy1` newline)
   where
-    particle = Particle <$> ("p=" *> point <* ", ")
-                        <*> ("v=" *> point <* ", ")
-                        <*> ("a=" *> point)
+    identify = zipWith (\i p -> p { pid = i }) [0..]
+    particle = Particle 0 <$> ("p=" *> point <* ", ")
+                          <*> ("v=" *> point <* ", ")
+                          <*> ("a=" *> point)
     int = signed decimal
     point = (,,) <$> ("<" *> int)
                  <*> ("," *> int)
@@ -93,17 +104,27 @@ exampleCollisions = Text.unlines
   ,"p=<3,0,0>, v=<-1,0,0>, a=<0,0,0>"
   ]
 
-tickColliding :: Map Point (Int, Particle) -> Map Point (Int, Particle)
-tickColliding = M.mapMaybe id . L.foldl' insert mempty . fmap (fmap tick) . M.elems
+tickColliding :: [Particle] -> [Particle]
+tickColliding = L.sortOn pid . removeCollisions . collide . fmap tick
   where
-    insert m p = M.alter (maybe (Just (Just p)) (pure (Just Nothing))) (pos $ snd p) m
+    removeCollisions = catMaybes . fmap unscathed
+    collide = L.groupOn pos . L.sortOn pos
+    unscathed [x] = Just x
+    unscathed _ = Nothing
 
 tick :: Particle -> Particle
-tick (Particle p v a) = Particle (translate v' p) v' a
+tick (Particle pid p v a) = Particle pid (translate v' p) v' a
   where v' = translate a v
 
+-- In a single dimension: a particle will invert if:
+-- - it is not motionless
+-- - it has non-zero acceleration
+-- - it is accelerating in the opposite direction of its current motion
+--
+-- i.e, like a ball chucked in the air, it is still going up, and has yet to come down.
+--
+-- In N dimensions, this applies to all components.
 willInvert :: Particle -> Bool
-willInvert (Particle _ v a) = any inverting dimensions
+willInvert (Particle _ _ v a) = any inverting dimensions
   where
     inverting (Lens d) = (v ^. d) /= 0 && (a ^. d) /= 0 && (a ^. d < 0) /= (v ^. d < 0)
-
