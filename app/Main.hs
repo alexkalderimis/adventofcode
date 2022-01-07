@@ -20,8 +20,9 @@ data Options = Options
   , action :: Action
   } deriving (Show, Eq)
 
-validDays :: [String]
+validDays, validYears :: [String]
 validDays = (show <$> [10..25]) <> ([1..9] >>= (\n -> [show n, '0' : show n]))
+validYears = ["2015", "2017", "2018", "2019", "2020", "2021"]
 
 mkOptions :: Maybe String -> String -> String -> Maybe Action -> Options
 mkOptions mvariant year day action = Options
@@ -49,9 +50,9 @@ parseAction = eitherReader $ \s -> case s of
 
 parseYear :: ReadM String
 parseYear = eitherReader $ \s ->
-  if s `elem` ["2015", "2017", "2018", "2019", "2020", "2021"]
+  if s `elem` validYears
   then pure s
-  else Left ("You haven't done any puzzles in " <> s)
+  else Left ("Invalid year. Expected one of " <> show validYears <> ". Got: " <> s)
 
 parseDay :: ReadM String
 parseDay = eitherReader $ \s ->
@@ -77,6 +78,7 @@ run opts = do
       runProcess (f $ proc executable $ commandLine opts) >>= exitWith
     _ -> BS.hPut stderr err >> exitWith exitCode 
 
+-- This value needs to be kept in sync with the build target in the Makefile and the bin/source_file script.
 exe :: Options -> String
 exe opts = L.intercalate "_" $ filter (not . null) ["build/puzzle", year opts, day opts, variant opts]
 
@@ -92,6 +94,7 @@ inputProvider opts = case action opts of
              else pure id
 
 commandLine :: Options -> [String]
+-- commandLine opts = ["+RTS", "-N4", "-RTS"] ++ case action opts of
 commandLine opts = case action opts of
   Test -> ["test"]
   PT1 -> ["pt1"]
