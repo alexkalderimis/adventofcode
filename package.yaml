@@ -37,6 +37,7 @@ library:
     - hspec-core
     - vector
     - vector-instances
+    - vector-algorithms
     - unordered-containers
     - hashable
     - text
@@ -72,6 +73,7 @@ executables:
     - hspec
     - vector
     - vector-instances
+    - vector-algorithms
     - unordered-containers
     - hashable
     - text
