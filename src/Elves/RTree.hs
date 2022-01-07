@@ -209,9 +209,15 @@ fromPoints ps
 
 bulkLoadPoints :: (Extendable i) => [(i, a)] -> RTree i a
 bulkLoadPoints ps
-  = let seeds' = seeds [ (fst p, fst p) | p <- ps ]
-        buckets = fmap (\r -> filter (\p -> Coord.containsP (fst p) r) ps) seeds'
-     in untip $ region ( fromPoints <$> buckets )
+  = let seeds'  = fmap (\r -> (r, [])) $ seeds [ (fst p, fst p) | p <- ps ]
+        buckets = F.foldl' place seeds' ps
+     in untip $ region ( fromPoints . snd <$> buckets )
+  where
+    -- find the first place we can put the point.
+    place ((r, ps) :| tl) p = if Coord.containsP (fst p) r
+                                then (r, p : ps) :| tl
+                                else let tl' = maybe [] (NE.toList . (`place` p)) (NE.nonEmpty tl)
+                                      in (r, ps) :| tl'
 
 fromPointsWith :: (Extendable i) => (a -> a -> a) -> [(i, a)] -> RTree i a
 fromPointsWith f ps = fromListWith f [ ((p,p), x) | (p, x) <- ps ]

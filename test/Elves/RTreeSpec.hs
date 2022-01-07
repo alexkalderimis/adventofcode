@@ -59,10 +59,45 @@ decontructionSpec = describe "deconstruct" $ do
     specify "sconcat (subtrees t) === t" $ property $ \t ->
       sconcat (subtrees t) `eq` (t :: RTree Dim3 Word)
 
-sizeSpec = describe "size"
-  $ it "always has the size of the elements you put in it"
-  $ property $ \(Unique elems) ->
-    let t = fromPoints elems in size (t :: Dim3Set) == length elems
+sizeSpec = describe "size" $ do
+
+  describe "fromPoints" $ do
+    it "always has the size of the elements you put in it" $ property $ \(Unique elems) ->
+      let t = fromPoints elems in size (t :: Dim3Set) === length elems
+
+    describe "counterexample-1" $ do
+      let ps = [(-19,-2,-3)
+               ,(-24,-23,18)
+               ,(25,-20,2)
+               ,(-19,1,11)
+               ,(2,-19,-26)
+               ,(12,-7,-5)
+               ,(6,-3,4)
+               ,(-20,4,7)
+               ,(16,-4,-26)
+               ,(-24,-17,14)
+               ,(-4,-4,8)
+               ,(-14,23,22)
+               ,(-21,0,-15)
+               ,(-13,24,16)
+               ,(8,18,20)
+               ,(-7,-3,17)
+               ,(13,-22,-8)
+               ,(-22,14,1)
+               ,(8,-21,-4)
+               ,(-2,4,-18)
+               ,(10,-16,-25)
+               ,(-18,14,1)
+               ]
+          t = fromPoints [ (p, ()) | p <- ps ] :: Dim3Set
+      it "has the correct size" $ do
+        size t `shouldBe` length ps
+      it "has the correct elems" $ do
+        fmap (fst . fst) (assocs t) `shouldMatchList` ps
+  
+  describe "fromList" $ do
+    it "always has the size of the elements you put in it" $ property $ \(Unique elems) ->
+      let t = fromList elems in size (t :: Dim3Set) === length elems
 
 querySpec = describe "query" $ do
     it "no-false-positives" $ property $ \e elems ->
