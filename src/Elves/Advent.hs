@@ -51,14 +51,15 @@ staticDay n pt1 pt2 spec = do
                           $ hspec (describe ("Day " <> show n) spec)
     _        -> die "bad arguments. Expected pt1, pt2 or test"
 
-namedTime :: String -> IO () -> IO ()
+namedTime :: String -> IO a -> IO a
 namedTime name act = do
   unless (null name) $ putStrLn name >> putStrLn (replicate (length name) '-')
   start <- Clock.getCurrentTime
-  act
+  r <- act
   unless (null name) $ putStrLn (replicate (length name) '-')
   end <- Clock.getCurrentTime
   print (Clock.diffUTCTime end start)
+  pure r
 
 time :: IO () -> IO ()
 time = namedTime ""
