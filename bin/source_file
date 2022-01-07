@@ -13,6 +13,8 @@ main = do
     [name] -> case splitOn "_" name of
                 ["build/puzzle", year, day] -> putStrLn (year ++ "/" ++ day ++ "/Main.hs")
                 ["build/puzzle", year, day, variant] -> putStrLn (year ++ "/" ++ day ++ "/Main" ++ variant ++ ".hs")
+                ["build/debug", year, day] -> putStrLn (year ++ "/" ++ day ++ "/Main.hs")
+                ["build/debug", year, day, variant] -> putStrLn (year ++ "/" ++ day ++ "/Main" ++ variant ++ ".hs")
                 _ -> hPutStrLn stderr ("Cannot determine source of " ++ name)
     _ -> hPutStrLn stderr ("Bad arguments: " ++ intercalate " " args)
 
