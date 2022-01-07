@@ -51,6 +51,7 @@ import           Test.QuickCheck.Gen       (chooseInt, suchThat)
 import           Elves.Coord (Bounds, Extent, Coord, Dimension, expandB, dimensions, straightLine, overlaps)
 import qualified Elves.Coord as Coord
 import           Elves.Core
+import           Elves (median)
 
 type Extendable i = (Queryable i, Extent (Dimension i))
 
@@ -187,7 +188,7 @@ elems :: RTree i a -> [a]
 elems = F.toList
 
 maxPageSize :: forall i a. Coord i => RTree i a -> Int
-maxPageSize t = 2 ^ length dims
+maxPageSize _ = 2 ^ length dims
   where
     dims :: [Coord.Accessor i (Dimension i)]
     dims = dimensions
@@ -199,7 +200,18 @@ fromList :: (Extendable i) => [(Bounds i, a)] -> RTree i a
 fromList = fromListWith pure
 
 fromPoints :: (Extendable i) => [(i, a)] -> RTree i a
-fromPoints ps = fromList [ ((p,p), x) | (p, x) <- ps ]
+fromPoints ps
+  | t <- bulkLoadPoints ps
+  , longerThan (2 * maxPageSize t) ps
+  = t
+
+  | otherwise = fromList [ ((p,p), x) | (p, x) <- ps ]
+
+bulkLoadPoints :: (Extendable i) => [(i, a)] -> RTree i a
+bulkLoadPoints ps
+  = let seeds' = seeds [ (fst p, fst p) | p <- ps ]
+        buckets = fmap (\r -> filter (\p -> Coord.containsP (fst p) r) ps) seeds'
+     in untip $ region ( fromPoints <$> buckets )
 
 fromPointsWith :: (Extendable i) => (a -> a -> a) -> [(i, a)] -> RTree i a
 fromPointsWith f ps = fromListWith f [ ((p,p), x) | (p, x) <- ps ]
@@ -224,23 +236,27 @@ fromListWith f kvs =
 
 bulkLoad :: Extendable i
          => (a -> a -> a) -> [(Bounds i, a)] -> RTree i a
-bulkLoad f kvs = let init = region (seeds $ fmap fst kvs)
-                  in untip $ L.foldl' (\t (k, a) -> insertWith f k a t) init kvs
+bulkLoad f kvs = let seeds' = seeds (fst <$> kvs)
+                     seeded = region (fmap (\(i, j) -> Region i j (pure Tip)) seeds')
+                  in untip $ L.foldl' (\t (k, a) -> insertWith f k a t) seeded kvs
 
--- a set of dummy regions, equally dividing up the total space, each with a single tip in them.
-seeds :: forall i a. Extendable i => [Bounds i] -> NonEmpty (RTree i a)
+-- a set of bounds, equally dividing up the total space
+seeds :: forall i a. Extendable i => [Bounds i] -> NonEmpty (Bounds i)
 seeds bs
   = let dims = dimensions
         box = L.foldl1 expandB bs
         bss = L.foldl' splitBounds [box] dims
-     in NE.fromList [ Region i j (pure Tip) | (i, j) <- bss ]
+     in NE.fromList bss
   where
+    n = length bs
     dims :: [Coord.Accessor i (Dimension i)]
     dims = dimensions
     splitBounds unsplit d = let read = view (runLens d)
                                 write = set (runLens d)
+                                med = median [ Coord.midpoint (read p) (read p') | (p, p') <- bs ]
                              in unsplit >>= \(lb, ub) -> let mp = Coord.midpoint (read lb) (read ub)
-                                                          in [(lb, write mp ub), (write mp lb, ub)]
+                                                             x = fromMaybe mp med
+                                                          in [(lb, write x ub), (write x lb, ub)]
 
 insert :: (Extendable i) => Bounds i -> a -> RTree i a -> RTree i a
 insert = insertWith pure
