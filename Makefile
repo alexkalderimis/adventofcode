@@ -28,9 +28,15 @@ list:
 
 .SECONDEXPANSION:
 
-build/%: $$(call shell,bin/source_file $$@) adventofcode.cabal .last-lib-build
+build/puzzle_%: $$(call shell,bin/source_file $$@) adventofcode.cabal .last-lib-build
 	@mkdir -p build
 	@mkdir -p build/tmp
-	stack ghc -- -odir build/tmp -hidir build/tmp -O2 $< -o $@
+	stack ghc -- -threaded -rtsopts -with-rtsopts="-H128m" -odir build/tmp -hidir build/tmp -O2 -optc-ffast-math $< -o $@
+	@rm -r build/tmp
+
+build/debug_%: $$(call shell,bin/source_file $$@) adventofcode.cabal .last-lib-build
+	@mkdir -p build
+	@mkdir -p build/tmp
+	stack ghc -- -threaded -rtsopts -with-rtsopts="-H128m" -prof -odir build/tmp -hidir build/tmp -O2 -optc-ffast-math $< -o $@
 	@rm -r build/tmp
 

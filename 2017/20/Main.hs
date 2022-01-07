@@ -1,19 +1,19 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE BangPatterns #-}
 
-import           Control.Arrow
+module Main (main) where
+
 import           Control.Lens
-import           Control.Monad
 import           Data.Attoparsec.Text    (decimal, letter, signed)
 import qualified Data.List.Extra         as L
 import qualified Data.IntMap.Strict      as M
-import           Data.Maybe
 import           Data.Ord
 import qualified Data.Text               as Text
 import           Text.Parser.Char        (newline)
 import           Text.Parser.Combinators (sepBy1)
 
 import           Elves
-import           Elves.Advent
+import           Elves.Advent            (day)
 import           Elves.Coord
 import           Elves.RTree             (RTree)
 import qualified Elves.RTree             as RT
@@ -36,27 +36,34 @@ main = day 20 parser pt1 pt2 test
 
 -- no more collisions are possible when no particles are going to invert
 -- and all particles are getting further away from each other
-pt2 = runTilInversion 0
+pt2 sys = do
+  let sys'      = runTilInversion sys
+      distances = M.fromAscList [ (pid p, []) | p <- sys' ]
+
+  print . length $ runWhileApproaching sys' distances
+
   where
-    runTilInversion n sys = do
-      -- putStrLn $ "pt2-a: " ++ show ( M.size sys)
+    runTilInversion !sys =
       let sys' = tickColliding sys
        in if any willInvert sys'
-          then runTilInversion (n + 1) sys'
-          else putStrLn ("Starting runWhileApproaching after " <> show n <> " ticks")
-               >> runWhileApproaching 0 sys' (M.fromAscList [(pid p, []) | p <- sys'])
-    runWhileApproaching n sys history = do
-      -- putStrLn $ "pt2-b: " ++ show (M.size sys)
+          then runTilInversion sys'
+          else sys' -- <$ putStrLn (show n <> " ticks")
+
+    runWhileApproaching !sys !history =
       let sys'   = tickColliding sys
           t      = RT.fromPoints $ zip (pos <$> sys') (repeat ())
           d      = fromJust . distanceToNearest t
-          dists' = M.fromAscList [ (pid p, d (pos p) : history M.! pid p) | p <- sys' ]
-      if length sys' < 2 || all receding dists'
-         then do putStrLn ("All receding after " <> show n <> " ticks")
-                 print (length sys')
-         else runWhileApproaching (n + 1) sys' dists'
+          dists' = updateDistances d sys' history
+       in if length sys' < 2 || all receding dists'
+          then sys' -- <$ putStrLn (show n <> " ticks")
+          else runWhileApproaching sys' dists'
+         
     receding (a:b:_) = a >= b
     receding _       = False
+
+{-# INLINE updateDistances #-}
+updateDistances :: (Point -> Double) -> [Particle] -> M.IntMap [Double] -> M.IntMap [Double]
+updateDistances d sys history = M.fromAscList [ (pid p, d (pos p) : history M.! pid p) | p <- sys ]
 
 distanceToNearest :: RTree Point () -> Point -> Maybe Double
 distanceToNearest t p = measure p . foundPoint <$> RT.nearestNeighbour measure p t
@@ -68,20 +75,26 @@ distanceToNearest t p = measure p . foundPoint <$> RT.nearestNeighbour measure p
 
 test = do
   describe "example system" $ do
-    let msys = parseOnly parser exampleSystem
+    let esys = parseOnly parser exampleSystem
     it "parsed correctly" $ do
-      msys `shouldBe` Right [Particle 0 (3,0,0) (2,0,0) (-1,0,0)
-                            ,Particle 1 (4,0,0) (0,0,0) (-2,0,0)
+      esys `shouldBe` Right [ Particle 0 (3,0,0) (2,0,0) (-1,0,0)
+                            , Particle 1 (4,0,0) (0,0,0) (-2,0,0)
                             ]
-    it "ticks correctly" $ do
-      let (Right sys) = msys
-      (fmap pos . (!! 3) . iterate (fmap tick) $ sys) `shouldBe` [(3,0,0),(-8,0,0)]
-    describe "will invert" $ do
+    context "given successful parsing" $ do
+      let (Right sys) = esys
+      it "ticks correctly" $ do
+        (fmap pos . (!! 3) $ iterate tickColliding sys) `shouldBe` [(3,0,0),(-8,0,0)]
       it "knows which particles are going to invert" $ do
-        let (Right sys) = msys
         fmap willInvert sys `shouldBe` [True,False]
+  describe "tickColliding" $ do
+    it "removes collisions" $ do
+      let sys = [ Particle 0 (3,0,0) (0,0,0) (0,0,0)
+                , Particle 1 (4,0,0) (0,0,0) (-2,0,0)
+                , Particle 2 (1,0,0) (0,0,0) (1,0,0)
+                ]
+      tickColliding sys `shouldBe` take 1 sys
 
-parser = fmap identify (particle `sepBy1` newline)
+parser = identify <$> particle `sepBy1` newline
   where
     identify = zipWith (\i p -> p { pid = i }) [0..]
     particle = Particle 0 <$> ("p=" *> point <* ", ")
@@ -107,10 +120,10 @@ exampleCollisions = Text.unlines
 tickColliding :: [Particle] -> [Particle]
 tickColliding = L.sortOn pid . removeCollisions . collide . fmap tick
   where
-    removeCollisions = catMaybes . fmap unscathed
+    removeCollisions = mconcat . fmap unscathed
     collide = L.groupOn pos . L.sortOn pos
-    unscathed [x] = Just x
-    unscathed _ = Nothing
+    unscathed [x] = [x]
+    unscathed _   = []
 
 tick :: Particle -> Particle
 tick (Particle pid p v a) = Particle pid (translate v' p) v' a
