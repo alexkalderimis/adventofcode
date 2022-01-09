@@ -24,6 +24,7 @@ instance Arbitrary ValidBounds where
     return (ValidBounds (lb,ub))
 
 type Dim3Set = RTree Dim3 ()
+type RangeTree a = RTree Int a
 
 newtype Unique a = Unique { getUnique :: [a] } deriving (Show)
 

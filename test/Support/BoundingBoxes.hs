@@ -31,10 +31,9 @@ newtype Region = Region { getRegion :: (Dim2, Dim2) } deriving (Show, Eq)
 
 instance Arbitrary Region where
   arbitrary = do
-    (a,b) <- arbitrary
-    a' <- arbitrary `suchThat` (>= a)
-    b' <- arbitrary `suchThat` (>= b)
-    pure (Region ((a,b),(a',b')))
+    as <- vector 2
+    bs <- vector 2
+    pure (Region ((minimum as, minimum bs),(maximum as, maximum bs)))
 
   shrink (Region r) = fmap Region .filter (/= r) . fmap (squeeze r) $ [Lens _1, Lens _2]
 
@@ -46,11 +45,9 @@ cubeSize = Ix.rangeSize . getCube
 
 instance Arbitrary Cube where
   arbitrary = do
-    (a,b,c) <- arbitrary
-    a' <- arbitrary `suchThat` (>= a)
-    b' <- arbitrary `suchThat` (>= b)
-    c' <- arbitrary `suchThat` (>= c)
-    pure (Cube ((a,b,c),(a',b',c')))
+    (a0, b0, c0) <- arbitrary
+    (a1, b1, c1) <- arbitrary
+    pure (Cube ((min a0 a1, min b0 b1, min c0 c1),(max a0 a1, max b0 b1, max c0 c1)))
 
   shrink (Cube c) = fmap Cube
                   . filter (/= c)

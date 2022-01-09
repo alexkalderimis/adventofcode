@@ -11,7 +11,8 @@ module Elves.RTree (
   singleton, region, point, bounds, bounds', indexed, locations, assocs, elems,
   maxPageSize, size, sizeWith, extent, null,
   fromList, fromPoints, fromPointsWith, fromListWith, 
-  alter, alterM, delete, insert, insertPoint, insertWith, empty, union, unionWith,
+  alter, alterM, delete, insert, insertPoint, insertWith, empty,
+  unions, union, unionWith,
   subtrees, leaves, forest, fromTree,
   query, popQuery, member, lookup, nearestNeighbour, nearestNeighbourK, nearestNeighbours,
   expandQuery, drawTree, diffTree, overlapping
@@ -127,11 +128,11 @@ instance Traversable (RTree i) where
   traverse f (Leaf i j a)     = Leaf i j <$> f a
   traverse f (Region i j ts) = Region i j <$> sequenceA (traverse f <$> ts)
 
-instance (Extendable i) => Semigroup (RTree i a) where
-  (<>) = union
+instance (Extendable i, Semigroup a) => Semigroup (RTree i a) where
+  (<>) = unionWith (<>)
 
-instance (Extendable i) => Monoid (RTree i a) where
-  mempty = Tip
+instance (Extendable i, Semigroup a) => Monoid (RTree i a) where
+  mempty = empty
   mappend = (<>)
 
 instance Eq2 RTree where
@@ -155,6 +156,7 @@ instance (Coord i, Real (Dimension i), Eq i, Eq a) => Eq (RTree i a) where
              Nothing -> True
              Just (lb,_) -> priorityOrder straightLine lb a == priorityOrder straightLine lb b
 
+{-# INLINE point #-}
 point :: Coord i => i -> Bounds i
 point i = (i,i)
 
@@ -163,11 +165,13 @@ point i = (i,i)
 getPoint :: Coord i => Bounds i -> i
 getPoint = fst
 
+{-# INLINE bounds #-}
 bounds :: RTree i a -> Maybe (Bounds i)
 bounds (Leaf i j _)   = Just (i, j)
 bounds (Region i j _) = Just (i, j)
 bounds Tip            = Nothing
 
+{-# INLINE bounds' #-}
 bounds' :: HasCallStack => RTree i a -> Bounds i
 bounds' (Leaf i j _) = (i, j)
 bounds' (Region i j _) = (i, j)
@@ -230,7 +234,9 @@ fromListWith f kvs =
    in case kvs of
         []                -> tip
         [a]               -> singleton' a
-        _ | lots pageSize -> bulkLoad f kvs
+        _ | lots pageSize -> bulkLoad [ (head ks, L.foldl1 f vs) | grp <- L.groupOn fst (L.sortOn fst kvs)
+                                      , let (ks, vs) = unzip grp
+                                      ]
         _ -> let kvs' = dedupe kvs
                  (init, rest) = L.splitAt pageSize kvs'
                  t0 = region (singleton' <$> NE.fromList init)
@@ -240,11 +246,11 @@ fromListWith f kvs =
     singleton' (k,v) = singleton k v
     dedupe = fmap (\grp -> (fst (head grp), foldl1 f (snd <$> grp))) . L.groupOn fst . L.sortOn fst
 
-bulkLoad :: Extendable i
-         => (a -> a -> a) -> [(Bounds i, a)] -> RTree i a
-bulkLoad f kvs = let seeds' = seeds (fst <$> kvs)
-                     seeded = region (fmap (\(i, j) -> Region i j (pure Tip)) seeds')
-                  in untip $ L.foldl' (\t (k, a) -> insertWith f k a t) seeded kvs
+bulkLoad :: Extendable i => [(Bounds i, a)] -> RTree i a
+bulkLoad kvs = let box = L.foldl1 expandB (fst <$> kvs)
+                   seeds = [Region p p (pure Tip) | p <- Coord.corners box]
+                   t = Region (fst box) (snd box) (NE.fromList seeds)
+                in deepuntip $ F.foldl' (\t (k, v) -> insert k v t) t kvs
 
 -- a set of bounds, equally dividing up the total space
 seeds :: forall i a. Extendable i => [Bounds i] -> NonEmpty (Bounds i)
@@ -271,7 +277,8 @@ insertPoint :: (Extendable i) => i -> a -> RTree i a -> RTree i a
 insertPoint i = insert (i,i)
 
 insertWith :: (Extendable i) => (a -> a -> a) -> Bounds i -> a -> RTree i a -> RTree i a
-insertWith f i a = unionWith f (singleton i a)
+insertWith f k a = alter f' k
+  where f' = maybe (pure a) (pure . f a)
 
 delete :: (Extendable i) => Bounds i -> RTree i a -> RTree i a
 delete = alter (pure Nothing)
@@ -285,22 +292,25 @@ alter f k = runIdentity . alterM (Identity . f) k
 alterM :: (Extendable i, Monad m)
        => (Maybe a -> m (Maybe a)) -> Bounds i -> RTree i a -> m (RTree i a)
 alterM f k t
+  | Tip <- t
+  = whenAbsent empty Nothing (singleton k)
+
   | Leaf lb ub a <- t
-  , k == (lb, ub)
-  = maybeTree <$> f (Just a)
+  = if k == (lb, ub)
+       then whenAbsent empty (Just a) (singleton k)
+       else whenAbsent t Nothing $ \v -> region (singleton k v :| [t])
 
   | Region lb ub ts <- t
   , (xs, ys)        <- NE.partition (includes k) ts
   , (here, there)   <- L.partition (member k) xs
   = case (here, there <> ys) of
-      ([], _)    -> maybeInsert <$> f Nothing
+      ([], _)    -> whenAbsent t Nothing $ \v -> region (insertChild pure k v ts)
       ([x], ts') -> do x' <- untip <$> alterM f k x
                        pure $ region (x' :| ts')
       _ -> error "Illegal tree: key must be member of unique path"
 
-  | otherwise = maybeTree <$> f Nothing
-
   where
+    whenAbsent t ma k = do maybe t k <$> f ma
     maybeTree = maybe Tip (singleton k)
     maybeInsert = maybe t (\x -> insert k x t)
 
@@ -308,6 +318,11 @@ alterM f k t
 untip :: (Ord (Dimension i), Coord i) => RTree i a -> RTree i a
 untip (Region _ _ ts) | any null ts = region ts
 untip t = t
+
+deepuntip :: (Ord (Dimension i), Coord i) => RTree i a -> RTree i a
+deepuntip (Region _ _ ts) = region (fmap deepuntip ts)
+deepuntip t = t
+
 
 null :: RTree i a -> Bool
 null Tip = True
@@ -320,28 +335,18 @@ union :: (Extendable i)
       => RTree i a -> RTree i a -> RTree i a
 union = unionWith pure
 
+unions :: (Extendable i, Foldable f) => f (RTree i a) -> RTree i a
+unions = fromList . F.foldMap assocs
+
 -- The meat of the matter - adding two trees together.
 unionWith :: (HasCallStack, Extendable i)
           => (a -> a -> a) -> RTree i a -> RTree i a -> RTree i a
 -- the trivial cases: tips are identities of union
 unionWith f Tip right = right
 unionWith f left Tip  = left
--- when both are leaves, we need to deal with collisions
-unionWith f l@(Leaf i j a) r@(Leaf i' j' b)
-  | i == i' && j == j' = Leaf i j (f a b)
-  | otherwise = let kids = sortKids (l :| pure r) in region kids
-unionWith f l r
-  -- when l overlaps r, we need to insert l into r somehow.
-  | overlapping l r = compact $ case l of
-      Leaf i j a    -> let k = (i,j)
-                           ts' = sortKids . insertChild f k a $ subtrees r
-                        in region ts'
-      Region _ _ ts -> F.foldl' (\a t -> unionWith f t a) r ts
-  -- safe to use fromJust here, as we have guarded against Tips
-  -- in the trivial cases above.
-  | otherwise      = let (lb,ub) = fromJust (expandB <$> bounds l <*> bounds r)
-                         ts' = sortKids (l :| pure r)
-                      in Region lb ub ts'
+unionWith f l@(Leaf i j a) r = insertWith f (i,j) a r
+unionWith f l r@(Leaf i j a) = insertWith (flip f) (i,j) a l
+unionWith f l r = L.foldl' (\t leaf -> unionWith f leaf t) r (leaves l)
 
 sortKids :: (Ord i) => NonEmpty (RTree i a) -> NonEmpty (RTree i a)
 sortKids = NE.sortBy (comparing bounds)
@@ -386,13 +391,14 @@ insertChild :: (Extendable i)
 insertChild f k a ts 
   | (collisions, rest) <- NE.partition (collides k) ts
   , not (L.null collisions)
-  = unionWith f t (mconcat collisions) :| rest
+  , not (L.null rest)
+  = insertWith f k a (unions collisions) :| rest
 
   | length ts < maxPageSize t
   = pure t <> ts
 
   | (best :| rest) <- selectChild t ts -- (joinOverlapping ts)
-  = unionWith f t best :| rest
+  = insertWith f k a best :| rest
 
   where
     -- the child
@@ -401,17 +407,15 @@ insertChild f k a ts
 joinOverlapping :: Extendable i => NonEmpty (RTree i a) -> NonEmpty (RTree i a)
 joinOverlapping (t :| ts)
   = case L.partition (overlapping t) ts of
-      (xs, ys) -> case NE.nonEmpty ys of
-                    Nothing -> pure (mconcat xs)
-                    Just ys' -> pure (mconcat xs) <> ys'
+      (xs, ys) -> unions xs :| ys
 
--- does this tree collide with these bounds?
+-- does this tree collide with these bounds? (i.e. are the bounds identical)
 collides bs = maybe False (== bs) . bounds
 
 -- choose the child that needs the smallest expansion to contain the child,
 -- in a tie, choose the child that is closest in extent to the child itself.
 -- This is designed to make sure we prefer collisions to containment
-selectChild t = NE.sortBy . comparing $ \x -> (expansion t x, expansion x t)
+selectChild t = NE.sortBy . comparing $ \x -> (expansion t x, size t)
 
 isRegion :: RTree i a -> Bool
 isRegion Region{} = True
@@ -467,8 +471,12 @@ nearestNeighbourK :: (Queryable i, Real b)
                   => (i -> i -> b) -> Int -> i -> RTree i a -> [(Bounds i,a)]
 nearestNeighbourK dist n pnt = take n . nearestNeighbours dist pnt
 
--- returns tree sorted into priority order
--- does not include any objects located precisely at the given point
+-- returns items in the tree sorted into priority order, defined by distance
+-- to a given point.
+--
+-- Does not include any objects located precisely at the given point
+-- If you need to include these, consider using 'lookup' to check for their
+-- presence.
 nearestNeighbours :: (Queryable i, Real b)
                   => (i -> i -> b) -> i -> RTree i a -> [(Bounds i,a)]
 nearestNeighbours dist pnt = filter ((/= (pnt,pnt)) . fst)

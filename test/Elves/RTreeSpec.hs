@@ -1,5 +1,6 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE NumericUnderscores #-}
 
 module Elves.RTreeSpec (spec) where
 
@@ -18,7 +19,7 @@ import qualified Data.Ix                  as Ix
 import qualified Data.List                as L
 import           Data.List.NonEmpty       (NonEmpty (..))
 import qualified Data.List.NonEmpty       as NE
-import           Data.Semigroup           (sconcat)
+import           Data.Semigroup           (Sum(..), All(..), sconcat)
 import           Test.Hspec
 import           Test.QuickCheck          hiding (within)
 import qualified Test.QuickCheck          as QC
@@ -54,10 +55,10 @@ spec = describe "Elves.RTree" $ do
 decontructionSpec = describe "deconstruct" $ do
   describe "leaves" $ do
     specify "mconcat (leaves t) === t" $ property $ \t ->
-      mconcat (leaves t) `eq` (t :: RTree Dim3 Word)
+      mconcat (leaves t) `eq` (t :: RTree Dim3 (Sum Word))
   describe "subtrees" $ do
     specify "sconcat (subtrees t) === t" $ property $ \t ->
-      sconcat (subtrees t) `eq` (t :: RTree Dim3 Word)
+      sconcat (subtrees t) `eq` (t :: RTree Dim3 (Sum Word))
 
 sizeSpec = describe "size" $ do
 
@@ -130,7 +131,7 @@ querySpec = describe "query" $ do
           d = singleton (k 20 30) 'D'
           e = singleton (k (-5) (-1)) 'E'
           f = singleton (k 23 27) 'F'
-          t = mconcat [a,b,c,d,e,f]
+          t = unions [a,b,c,d,e,f]
       let search i s      = query s i t
           shouldFind x    = (`shouldContain` elems x) . fmap snd
           shouldNotFind x = (`shouldNotContain` elems x) . fmap snd
@@ -178,24 +179,38 @@ querySpec = describe "query" $ do
 
 lookupSpec = describe "lookup" $ do
   let oneDB = (cast :: Cast (RTree Int Bool))
+      to n = QC.within (max n 1 * 2000)
 
   specify "We can find anything present in the tree" $ property $ \(Cube bs) x t ->
-    lookup bs (singleton bs x <> t) === Just (x :: Word)
+    to (size t) $
+    lookup bs (singleton bs x `union` t) === Just (x :: Word)
 
-  specify "We cannot find anything not present in the tree"
-   $ property $ \(Cube bs) xs ->
+  specify "We cannot find anything not present in the tree" $ property $ \(Cube bs) xs ->
     let t = RT.fromList (filter ((/= bs) . fst) xs)
-     in lookup bs t === (Nothing :: Maybe Word)
+     in to (size t) $ lookup bs t === (Nothing :: Maybe Word)
 
-  specify "lookup q t === L.lookup q (assocs t)" $ property $ \(ValidBounds q) t ->
-    lookup q (oneDB t) === L.lookup q (assocs t)
+  specify "lookup q t === L.lookup q (assocs t)" $
+    property $ \(ValidBounds q) t -> to (size t) $
+      lookup q (oneDB t) === L.lookup q (assocs t)
 
-  specify "lookup q (a <> b) == if q `member` a then lookup q a else lookup q b"
-    $ property $ \(ValidBounds q) a b ->
-        let r = lookup q (a <> b)
+  specify "lookup q (a `union` b) == if q `member` a then lookup q a else lookup q b"
+    $ property $ \(ValidBounds q) a b -> to (size a + size b) $
+        let r = lookup q (a `union` b)
          in if RT.member q (oneDB a)
                then r === lookup q a
                else r === lookup q b
+
+  describe "counterexample-1" $ do
+    let q = (-370,34)
+        a = RT.fromList [((-25,1),True),((-21,14),False),((-23,15),False),((-7,-3),False),((-19,0),True),((-17,26),False),((-3,-1),True),((-8,-7),True),((15,20),False),((4,40),True),((23,26),False),((19,22),False),((19,25),False),((25,27),True),((8,10),False),((1,18),True),((22,23),True),((-20,-12),True)]
+        b = RT.fromList [((-22,-22),True),((-20,-18),True),((-20,9),False),((-1,24),False),((-18,23),True),((-10,15),False),((-6,10),False),((17,17),False),((12,17),True),((11,12),True),((9,12),False),((-19,2),True)]
+        t = a `union` b :: RangeTree Bool
+
+    it "can compute the union" $ do
+      size t `shouldBe` size a + size b
+
+    it "cannot find the query in any of the trees" $ do
+      (lookup q t, lookup q a, lookup q b) `shouldBe` (Nothing, Nothing, Nothing)
 
 expandQuerySpec = describe "expandQuery" $ do
     it "always includes the query" $ property $ \(NonNegative n) q ->
@@ -246,17 +261,17 @@ insertSpec = describe "insert" $ do
           a = region $ NE.fromList [singleton ( 0,1) True, dup True]
           b = region $ NE.fromList [singleton (-1,2) False, dup False]
       it "does not exist" $ do
-        size (a <> b :: RTree Int Bool) `shouldBe` 3
+        size (a `union` b :: RTree Int Bool) `shouldBe` 3
       it "has the value of the LHS when the LHS is a" $ do
-        lookup (2,3) (a <> b) `shouldBe` lookup (2,3) a
+        lookup (2,3) (a `union` b) `shouldBe` lookup (2,3) a
       it "has the value of the LHS when the LHS is b" $ do
-        lookup (2,3) (b <> a) `shouldBe` lookup (2,3) b
+        lookup (2,3) (b `union` a) `shouldBe` lookup (2,3) b
       describe "deeply nested entries" $ do
         let d1_tree = RT.fromList . flip zip (repeat ()) . fmap pair
             t1 = d1_tree [(-15,-10),(0,5),(4,7),( 9,18),(10,20),(15,16),(17,25)]
             t2 = d1_tree [(-15, -9),(1,6),(5,8),(10,19),(11,21),(15,16),(18,26)]
-        specify "<> acts like set-union" $ do
-          size (t1 <> t2) === (size t1) + (size t2) - 1
+        specify "union acts like set-union" $ do
+          size (t1 `union` t2) === (size t1) + (size t2) - 1
 
     describe "counter-example-1" $ do
       let a = region $ NE.fromList [ singleton (-2,1) False
@@ -267,7 +282,7 @@ insertSpec = describe "insert" $ do
                                    ]
 
       specify "We can combine these regions" $ QC.within 100 $ do
-        size (a <> b :: RTree Int Bool) === 4
+        size (a `union` b :: RTree Int Bool) === 4
 
     specify "nested-objects" $ QC.within 1000 $ do
       size (insertPoint (0,0,0) () $ insert ((-10,-10,-10),(10,10,10)) () RT.empty) `shouldBe` 2
@@ -285,12 +300,12 @@ insertSpec = describe "insert" $ do
     -- |C    +---------+  D| 8
     -- +----------+ +------+ 9
     describe "a severely overlapping case" $ do
-      let a = singleton (( 0,  0), ( 4,  8)) 'A'
-          b = singleton (( 0, 10), ( 4, 20)) 'B'
-          c = singleton (( 5,  0), ( 9, 11)) 'C'
-          d = singleton (( 5, 13), ( 9, 20)) 'D'
-          e = singleton (( 2,  6), ( 8, 16)) 'E'
-          f = singleton (( 3,  3), ( 6, 17)) 'F'
+      let a = singleton (( 0,  0), ( 4,  8)) "A"
+          b = singleton (( 0, 10), ( 4, 20)) "B"
+          c = singleton (( 5,  0), ( 9, 11)) "C"
+          d = singleton (( 5, 13), ( 9, 20)) "D"
+          e = singleton (( 2,  6), ( 8, 16)) "E"
+          f = singleton (( 3,  3), ( 6, 17)) "F"
       forM_ [a,b,c,d] $ flip consider $ do
         which "overlaps e" (`shouldSatisfy` overlapping e)
         which "overlaps f" (`shouldSatisfy` overlapping f)
@@ -495,6 +510,21 @@ insertWithSpec = describe "insertWith" $ do
                              ,((1,2,1), 1)
                              ]
 
+  specify "it allows us to overload mconcat" $ property $ do
+    let ps = [(0,0,0),(0,0,1),(0,1,0),(1,2,1)
+             ,(0,0,0),(0,0,1),(0,1,0)
+                     ,(0,0,1),(0,1,0)
+                     ,(0,0,1)
+             ]
+        t = foldMap (\p -> singleton (point p) (Sum 1)) (ps :: [Dim3])
+        result = first fst <$> assocs t
+
+    result `shouldMatchList` [((0,0,0), Sum 2)
+                             ,((0,0,1), Sum 4)
+                             ,((0,1,0), Sum 3)
+                             ,((1,2,1), Sum 1)
+                             ]
+
 stackOfCardsSpec = describe "stack-of-cards" $ do
     -- test that we can use an RTree where every object overlaps with every
     -- other object. As an example, imagine a skewed stack of cards:
@@ -526,10 +556,10 @@ stackOfCardsSpec = describe "stack-of-cards" $ do
           it "can find the cards beneath a card" . withCard $ \card ->
               let origin = fst . fst $ card
                   r = snd <$> RT.query Overlapping (origin, origin) t
-               in r === ['a' .. snd card]
+               in r `shouldMatchList` ['a' .. snd card]
           it "knows all cards overlap each other" . withCard $ \card ->
               let r = snd <$> RT.query Overlapping (fst card) t
-               in r === fmap snd cards
+               in r `shouldMatchList` fmap snd cards
           it "can insert any additional card" 
             $ let origins = fst . fst <$> cards
                   newOrigin = arbitrary `suchThat` (`notElem` origins)
@@ -540,7 +570,7 @@ stackOfCardsSpec = describe "stack-of-cards" $ do
                      in size t' === (size t + 1)
 
     describe "fromList" (tests $ RT.fromList cards)
-    describe "mconcat" (tests $ mconcat [singleton bs a | (bs,a) <- cards])
+    describe "unions" (tests $ unions [singleton bs a | (bs,a) <- cards])
 
 lawsSpec = describe "Laws" $ do
   oneDBools
@@ -549,20 +579,20 @@ lawsSpec = describe "Laws" $ do
   fourDWords
 
 oneDBools = describe "1D-Bool"  $ do
-  let oneDB = (cast :: Cast (RTree Int Bool))
-  monoid (eq :: Comparator (RTree Int Bool))
+  let oneDB = (cast :: Cast (RTree Int All))
+  monoid (eq :: Comparator (RTree Int All))
   traversable oneDB
   equality oneDB (lookup (10, 17))
            (mconcat . reverse . leaves)
            (\t -> if null t
-                     then insert (10,17) True t
+                     then insert (10,17) (All True) t
                      else mconcat . drop 1 $ leaves t)
     
   oneDBoolCounterExamples
 
 oneDBoolCounterExamples = do
-  let oneDB = (cast :: Cast (RTree Int Bool))
-      is = eq :: Comparator (RTree Int Bool)
+  let oneDB = (cast :: Cast (RTree Int All))
+      is = eq :: Comparator (RTree Int All)
       t_o = 20000
       sgCounter name a b c = describe name $ do
         let l_assoc = (a <> b) <> c
@@ -580,16 +610,16 @@ oneDBoolCounterExamples = do
         it "comparesEq"    $ QC.within t_o (l_assoc `is` r_assoc)
 
   sgCounter "counter-example-1"
-     (RT.fromList [((1,4), False)])
-     (RT.fromList [((3,6), False), ((-5,3), True), ((0,1), True)])
-     (RT.fromList [((4,7), False), ((5,10), False), ((3,6), True)])
+     (All <$> RT.fromList [((1,4), False)])
+     (All <$> RT.fromList [((3,6), False), ((-5,3), True), ((0,1), True)])
+     (All <$> RT.fromList [((4,7), False), ((5,10), False), ((3,6), True)])
 
   describe "counter-example-2" $ do
-    let t = RT.fromList [((-62,-19),False)
-                        ,(( 39,47),False)
-                        ,(( 53,77),True)
-                        ,(( 61,68),True)
-                        ,(( 67,74),False)
+    let t = RT.fromList [((-62,-19), All False)
+                        ,(( 39,47),  All False)
+                        ,(( 53,77),  All True)
+                        ,(( 61,68),  All True)
+                        ,(( 67,74),  All False)
                         ]
     it "has the correct size" $ QC.within 1000 $ do
       size t == 5
@@ -599,19 +629,19 @@ oneDBoolCounterExamples = do
       (t <> mempty) `is` t
 
   sgCounter "counter-example-3"
-      (RT.fromList [((-1,1),True)])
-      (RT.fromList [((-1,3),False)])
-      (RT.fromList [((-1,0),False),((-1,0),False),((2,3),True)])
+      (All <$> RT.fromList [((-1,1),True)])
+      (All <$> RT.fromList [((-1,3),False)])
+      (All <$> RT.fromList [((-1,0),False),((-1,0),False),((2,3),True)])
 
   sgCounter "counter-example-4"
-      (RT.fromList [((5,8),False)])
-      (RT.fromList [((4,5),True),((6,9),False)])
-      (RT.fromList [((4,9),False),((5,8),True)])
+      (All <$> RT.fromList [((5,8),False)])
+      (All <$> RT.fromList [((4,5),True),((6,9),False)])
+      (All <$> RT.fromList [((4,9),False),((5,8),True)])
 
   sgCounter "counter-example-5"
-      (RT.fromList [((-1, 9),True)])
-      (RT.fromList [])
-      (RT.fromList [((-5, 2),False)
+      (All <$> RT.fromList [((-1, 9),True)])
+      (All <$> RT.fromList [])
+      (All <$> RT.fromList [((-5, 2),False)
                    ,(( 0, 7),False)
                    ,(( 8,13),True)
                    ,((10,10),False)
@@ -619,13 +649,13 @@ oneDBoolCounterExamples = do
                    ])
 
   sgCounter "counter-example-6"
-      (RT.fromList [((-3,-3),True),((-3,4),True)])
-      (RT.fromList [])
-      (RT.fromList [((-4,-2),True),((0,3),True),((1,5),True),((2,3),True)])
+      (All <$> RT.fromList [((-3,-3),True),((-3,4),True)])
+      (All <$> RT.fromList [])
+      (All <$> RT.fromList [((-4,-2),True),((0,3),True),((1,5),True),((2,3),True)])
 
   sgCounter "counter-example-7"
-    (RT.fromList [((6,9),True)])
-    (RT.fromList [((-12,3),False)
+    (All <$> RT.fromList [((6,9),True)])
+    (All <$> RT.fromList [((-12,3),False)
                  ,((-3,-1),True)
                  ,((-1,1),False)
                  ,((1,2),True)
@@ -637,17 +667,17 @@ oneDBoolCounterExamples = do
                  ,((6,9),False)
                  ,((9,17),True)
                  ])
-    (RT.fromList [((10,18),True)])
+    (All <$> RT.fromList [((10,18),True)])
 
   sgCounter "counter-example-8"
-    (RT.fromList [ ((17,29),False), ((20,21),False), ((24,27),True) ])
-    (RT.fromList [ ((19,25),False), ((22,33),True),  ((24,27),False) ])
-    (RT.fromList [((25,31),True)])
+    (All <$> RT.fromList [ ((17,29),False), ((20,21),False), ((24,27),True) ])
+    (All <$> RT.fromList [ ((19,25),False), ((22,33),True),  ((24,27),False) ])
+    (All <$> RT.fromList [((25,31),True)])
 
   sgCounter "counter-example-9"
-    (RT.fromList [ ((-11,2),False)])
-    (RT.fromList [ ((8,8),False)])
-    (RT.fromList [ ((1,8),True)
+    (All <$> RT.fromList [ ((-11,2),False)])
+    (All <$> RT.fromList [ ((8,8),False)])
+    (All <$> RT.fromList [ ((1,8),True)
                  , ((1,11),False)
                  , ((8,8),False)
                  , ((8,9),True)
@@ -657,9 +687,9 @@ oneDBoolCounterExamples = do
   -- spurious counter-example. Reported as failure from quick-check but
   -- actually OK
   sgCounter "counter-example-10"
-    (RT.fromList [((2,79),False),((10,30),False)])
-    (RT.fromList [((7,77),False),((26,63),True)])
-    (RT.fromList [ ((-77,17),False)
+    (All <$> RT.fromList [((2,79),False),((10,30),False)])
+    (All <$> RT.fromList [((7,77),False),((26,63),True)])
+    (All <$> RT.fromList [ ((-77,17),False)
                  , ((-75,42),False) , ((-75,51),True) , ((-74,73),False)
                  , ((-55,62),True) , ((-50,77),False) , ((-43,71),True)
                  , ((-33,58),True) , ((-25,45),True) , ((-21,68),False)
@@ -695,11 +725,11 @@ dim3Sets = describe "Dim3Set"  $ do
                      else mconcat . drop 1 $ leaves t)
 
 twoDChars = describe "2D Chars" $ do
-  monoid (eq :: Comparator (RTree (Int,Int) Char))
+  monoid (eq :: Comparator (RTree (Int,Int) [Char]))
   traversable (cast :: Cast (RTree (Int,Int) Char))
 
 fourDWords = describe "4D Word"  $ do
-  monoid (eq :: Comparator (RTree (Int,Int,Int,Int) Word))
+  monoid (eq :: Comparator (RTree (Int,Int,Int,Int) (Sum Word)))
   traversable (cast :: Cast (RTree (Int,Int,Int,Int) Word))
 
 pair :: (Int,Int) -> (Int,Int)
