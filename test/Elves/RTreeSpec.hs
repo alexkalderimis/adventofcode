@@ -315,10 +315,12 @@ insertSpec = describe "insert" $ do
         which "overlaps c" (`shouldSatisfy` overlapping c)
         which "overlaps d" (`shouldSatisfy` overlapping d)
         which "overlaps e" (`shouldSatisfy` overlapping e)
-      it "can combine these leaves" $ property $ do
-        mconcat [a,b,c,d,e,f] `shouldSatisfy` ((6 ==) . size)
-      it "can combine these leaves-depth" $ property $ do
-        mconcat [a,b,c,d,e,f] `shouldSatisfy` ((3 ==) . depth)
+      describe "the concatenation of these trees" $ do
+        let t = mconcat [a,b,c,d,e,f]
+        it "has six elements" $ property $ do
+          size t `shouldBe` 6
+        it "is two layers deep" $ do
+          QC.counterexample ("depth (" <> show t <> ")") (depth t `shouldBe` 2)
 
     it "increases-size" $ property $ \t i -> QC.within 100000 $ do
       let delta = maybe 1 (pure 0) (lookup (i,i) t)

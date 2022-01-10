@@ -16,7 +16,7 @@ import Elves.Tiling
 
 type Depicted = A.Array G.Coord Char
 type Pixel = (G.Coord, Char)
-data BoxSpec = Box { fillChar :: Char, vEdgeChar :: Char, hEdgeChar :: Char }
+data BoxSpec = Box { fillChar :: Maybe Char, vEdgeChar :: Char, hEdgeChar :: Char }
 
 data NeighbourInput = NeighbourInput (Bounds Location) (Bounds Location)
   deriving (Show, Eq)
@@ -72,9 +72,9 @@ runExample = do
   putStrLn "TILES ==================="
   putStrLn (G.draw $ depict outer is (compactify ts))
 
-mainBox = Box ' ' '│' '─'
-intersectionBox = Box '/' '│' '─'
-tileBox = Box '.' '┊' '┈'
+mainBox         = Box Nothing '│' '─'
+intersectionBox = Box (Just '/') '│' '─'
+tileBox         = Box (Just '.') '┊' '┈'
 
 depict :: Bounds Location -> [Bounds Location] -> [Bounds Location] -> Depicted
 depict outer intersections tiles
@@ -90,11 +90,13 @@ depictOverlays :: BoxSpec -> [Bounds Location] -> Depicted -> Depicted
 depictOverlays _ [] board = board
 depictOverlays spec regions board
   = board // fill
-          // cnrMarkers
           // vedges
           // hedges
+          // cnrMarkers
   where
-    fill       = [ (coord loc, fillChar spec)  | loc <- regions >>= A.range ]
+    fill       = case fillChar spec of
+                   Nothing -> []
+                   Just chr -> [ (coord loc, chr)  | loc <- regions >>= A.range ]
     cnrMarkers = mconcat [ edgeSet "TL" '┌' , edgeSet "TR" '┐'
                          , edgeSet "BL" '└' , edgeSet "BR" '┘'
                          ]

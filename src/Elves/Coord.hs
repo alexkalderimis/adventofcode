@@ -48,18 +48,17 @@ class Ord a => Coord a where
 class Num a => Extent a where
   extent :: a -> a -> a
   midpoint :: a -> a -> a
+  divideAt :: (a,a) -> a -> ((a,a), (a,a))
 
 instance Extent Int where
   extent a b = (b - a) + 1
   midpoint a b = (a + b) `div` 2
+  divideAt (lb,ub) mp = ((lb, max lb (mp - 1)), (min ub mp, ub))
 
 instance Extent Double where
   extent a b = b - a
   midpoint a b = (a + b) / 2
-
-instance Extent G.Row where
-  extent (G.Row a) (G.Row b) = G.Row (extent a b)
-  midpoint (G.Row a) (G.Row b) = G.Row (midpoint a b)
+  divideAt (lb,ub) mp = ((lb, max lb (mp - 0.000001)), (min ub mp, ub))
 
 instance Coord Int where
   type Dimension Int = Int

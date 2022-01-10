@@ -1,0 +1,1 @@
+stack repl --ghci-options '-itest'

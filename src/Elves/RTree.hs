@@ -13,7 +13,7 @@ module Elves.RTree (
   fromList, fromPoints, fromPointsWith, fromListWith, 
   alter, alterM, delete, insert, insertPoint, insertWith, empty,
   unions, union, unionWith,
-  subtrees, leaves, forest, fromTree,
+  subtrees, leaves, forest, fromTree, depth,
   query, popQuery, member, lookup, nearestNeighbour, nearestNeighbourK, nearestNeighbours,
   expandQuery, drawTree, diffTree, overlapping
   ) where
@@ -268,7 +268,8 @@ seeds bs
                                 med = median [ Coord.midpoint (read p) (read p') | (p, p') <- bs ]
                              in unsplit >>= \(lb, ub) -> let mp = Coord.midpoint (read lb) (read ub)
                                                              x = fromMaybe mp med
-                                                          in [(lb, write x ub), (write x lb, ub)]
+                                                             ((_,a), (b, _)) = Coord.divideAt (read lb, read ub) x
+                                                          in [(lb, write a ub), (write b lb, ub)]
 
 insert :: (Extendable i) => Bounds i -> a -> RTree i a -> RTree i a
 insert = insertWith pure
@@ -571,3 +572,9 @@ longerThan :: Int -> [a] -> Bool
 longerThan n xs = case xs of
   [] -> False
   (_ : tl) -> if n <= 0 then True else longerThan (n - 1) tl
+
+depth :: RTree i a -> Int
+depth = go 0
+  where
+    go n (Region _ _ ts) = F.maximum (go (n + 1) <$> ts)
+    go n t = n

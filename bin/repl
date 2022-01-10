@@ -31,4 +31,3 @@ main = do
     _ -> die "At least two arguments expected"
 
 -- vim: syntax=haskell
-

@@ -67,6 +67,6 @@ nextCoords includeDiagonals bs (Coord r c) =
    in filter (Array.inRange bs) $ mconcat [straights, if includeDiagonals then diagnonals else []]
 
 draw :: IArray a Char => a Coord Char -> String
-draw grid = let (_, ub) = Array.bounds grid
-                w = getCol (col ub) + 1
+draw grid = let (lb, ub) = Array.bounds grid
+                w = getCol (col ub) - getCol (col lb) + 1
              in L.intercalate "\n" . L.chunksOf w $ Array.elems grid
