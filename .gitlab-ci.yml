@@ -20,6 +20,18 @@ build:elves:
   script:
     - stack build
 
+build:puzzles:
+  stage: build
+  script:
+    - ./bin/build-year
+  parallel:
+    matrix:
+      - YEAR:
+          - 2021
+          - 2019
+          - 2018
+          - 2017
+
 test:elves:
   stage: test
   needs: ["build:elves"]
