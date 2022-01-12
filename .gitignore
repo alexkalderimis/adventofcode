@@ -10,3 +10,6 @@ adventofcode.cabal
 dist-newstyle
 .ghc.environment.*
 build/
+*.hp
+*.aux
+*.ps
