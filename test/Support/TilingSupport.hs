@@ -14,8 +14,8 @@ import Elves.Coord (Bounds, overlaps)
 import Elves.Cartesian
 import Elves.Tiling
 
-type Depicted = A.Array G.Coord Char
-type Pixel = (G.Coord, Char)
+type Depicted = A.Array G.Coordinate Char
+type Pixel = (G.Coordinate, Char)
 data BoxSpec = Box { fillChar :: Maybe Char, vEdgeChar :: Char, hEdgeChar :: Char }
 
 data NeighbourInput = NeighbourInput (Bounds Location) (Bounds Location)

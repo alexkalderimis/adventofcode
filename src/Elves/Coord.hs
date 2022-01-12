@@ -14,8 +14,6 @@ import           Data.Ix         (Ix)
 import qualified Data.Ix         as Ix
 import qualified Data.List       as L
 
-import qualified Elves.StrictGrid as G
-
 type Bounds i = (i,i)
 
 type Accessor a b = ReifiedLens a a b b
@@ -69,13 +67,6 @@ instance Coord Double where
   type Dimension Double = Double
   dimensions = [Lens (lens id (pure id))]
   origin = 0
-
-instance Coord G.Coord where
-  type Dimension G.Coord = Int
-  origin = G.origin
-  dimensions = [Lens $ lens (G.getRow . G.row) (\c i -> c { G.row = G.Row i })
-               ,Lens $ lens (G.getCol . G.col) (\c i -> c { G.col = G.Col i })
-               ]
 
 scaleBounds :: Extent a => a -> Bounds a -> Bounds a
 scaleBounds factor (lb, ub) = let size = extent lb ub

@@ -8,11 +8,13 @@ import qualified Data.Array as Array
 import           Data.Array (Array)
 
 import Elves.StrictGrid
+import Elves.Coord.Strict
+import Elves.Coord (origin)
 
 -- simple array based matrices. We could use Repa for all of this, but the aim
 -- here is to keep stuff as simple as possible, and reimplement some basic stuff
 -- note: indices are 0-based
-newtype Matrix a = Matrix { getMatrix :: Array Coord a } deriving (Eq, Functor)
+newtype Matrix a = Matrix { getMatrix :: Array Coordinate a } deriving (Eq, Functor)
 
 instance Show a => Show (Matrix a) where
   show m = let (Coord (Row h) (Col w)) = dimensions m
@@ -31,7 +33,7 @@ identity i = matrix (Row i) (Col i) [if a == b then 1 else 0
                                     | (a, b) <- Array.range ((1, 1), (i, i))
                                     ]
 
-dimensions :: Matrix a -> Coord
+dimensions :: Matrix a -> Coordinate
 dimensions (Matrix a) = let (lb, ub) = Array.bounds a
                          in Coord ((row ub - row lb) + 1) ((col ub - col lb) + 1)
 
@@ -51,7 +53,7 @@ dotp a b = let (Coord m n) = dimensions a
                 
 {-# INLINE at #-}
 at :: Row -> Col -> Matrix a -> a
-at r c m = getMatrix m Array.! (Coord r c)
+at r c m = getMatrix m Array.! Coord r c
 
 {-# INLINE update #-}
 update :: Row -> Col -> a -> Matrix a -> Matrix a

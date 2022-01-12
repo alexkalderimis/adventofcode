@@ -16,6 +16,7 @@ module Elves.Matrix.Rotate (
 
 import qualified Data.Array as A
 
+import Elves.Coord.Strict (Coordinate(..), Row(..), Col(..))
 import Elves.StrictGrid
 import Elves.Matrix
 import qualified Elves.Coord as C
@@ -117,7 +118,7 @@ aroundY = aroundAxis $ \i -> case col i of
             Col 3 -> Coord (Row 1) (Col 2)
             Col 4 -> Coord (Row 2) (Col 1)
 
-aroundAxis :: (Eq a, Num a) => (Coord -> Coord) -> Rotation a -> Bool
+aroundAxis :: (Eq a, Num a) => (Coordinate -> Coordinate) -> Rotation a -> Bool
 aroundAxis f r = a == b
   where
     a = getMatrix $ matrix (Row 1) (Col 5) [0, 0, 1, 0, 0]
