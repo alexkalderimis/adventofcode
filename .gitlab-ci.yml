@@ -4,7 +4,12 @@ variables:
   STACK_ROOT: "${CI_PROJECT_DIR}/.stack-root"
 
 cache:
-  key: ${CI_COMMIT_REF_SLUG}
+  key:
+    files:
+      - package.yaml
+      - stack.yaml
+      - stack.yaml.lock
+      - Makefile
   paths:
     - .stack-work/
     - .stack-root/
