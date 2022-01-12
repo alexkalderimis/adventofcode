@@ -8,8 +8,6 @@ cache:
     files:
       - package.yaml
       - stack.yaml
-      - stack.yaml.lock
-      - Makefile
   paths:
     - .stack-work/
     - .stack-root/
