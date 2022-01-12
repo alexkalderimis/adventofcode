@@ -1,5 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE TypeFamilies #-}
 
 module Main (main) where
 
@@ -18,8 +19,21 @@ import           Elves.Coord
 import           Elves.RTree             (RTree)
 import qualified Elves.RTree             as RT
 
-type Point = (Int,Int,Int)
+data Point = P { px :: {-# UNPACK #-} !Int
+               , py :: {-# UNPACK #-} !Int
+               , pz :: {-# UNPACK #-} !Int
+               } deriving (Eq, Show, Ord)
+
 type ParticleID = Int
+type Distances = M.IntMap [Double]
+
+instance Coord Point where
+  type Dimension Point = Int
+  origin = P 0 0 0
+  dimensions = [ Lens $ lens px (\p i -> p { px = i })
+               , Lens $ lens py (\p i -> p { py = i })
+               , Lens $ lens pz (\p i -> p { pz = i })
+               ]
 
 data Particle = Particle
   { pid :: !ParticleID
@@ -38,7 +52,7 @@ main = day 20 parser pt1 pt2 test
 -- and all particles are getting further away from each other
 pt2 sys = do
   let sys'      = runTilInversion sys
-      distances = M.fromAscList [ (pid p, []) | p <- sys' ]
+      distances = initialDistances sys'
 
   print . length $ runWhileApproaching sys' distances
 
@@ -58,13 +72,23 @@ pt2 sys = do
           then sys' -- <$ putStrLn (show n <> " ticks")
           else runWhileApproaching sys' dists'
          
-    receding (a:b:_) = a >= b
-    receding _       = False
+    receding (a : b : _) = a >= b
+    receding _ = False
+
+{-# INLINE initialDistances #-}
+initialDistances :: [Particle] -> Distances
+initialDistances sys = M.fromAscList [ (pid p, []) | p <- sys ]
 
 {-# INLINE updateDistances #-}
-updateDistances :: (Point -> Double) -> [Particle] -> M.IntMap [Double] -> M.IntMap [Double]
-updateDistances d sys history = M.fromAscList [ (pid p, d (pos p) : history M.! pid p) | p <- sys ]
+updateDistances :: (Point -> Double) -> [Particle] -> Distances -> Distances
+updateDistances d sys history = M.fromAscList $ do
+  p <- sys
+  let curr = d (pos p)
+      prev = history M.! pid p
+      now = take 2 (curr : prev)
+  now `seq` pure (pid p, now)
 
+{-# INLINE distanceToNearest #-}
 distanceToNearest :: RTree Point () -> Point -> Maybe Double
 distanceToNearest t p = measure p . foundPoint <$> RT.nearestNeighbour measure p t
   where
@@ -77,20 +101,20 @@ test = do
   describe "example system" $ do
     let esys = parseOnly parser exampleSystem
     it "parsed correctly" $ do
-      esys `shouldBe` Right [ Particle 0 (3,0,0) (2,0,0) (-1,0,0)
-                            , Particle 1 (4,0,0) (0,0,0) (-2,0,0)
+      esys `shouldBe` Right [ Particle 0 (P 3 0 0) (P 2 0 0) (P (-1) 0 0)
+                            , Particle 1 (P 4 0 0) (P 0 0 0) (P (-2) 0 0)
                             ]
     context "given successful parsing" $ do
       let (Right sys) = esys
       it "ticks correctly" $ do
-        (fmap pos . (!! 3) $ iterate tickColliding sys) `shouldBe` [(3,0,0),(-8,0,0)]
+        (fmap pos . (!! 3) $ iterate tickColliding sys) `shouldBe` [P 3 0 0, P (-8) 0 0]
       it "knows which particles are going to invert" $ do
         fmap willInvert sys `shouldBe` [True,False]
   describe "tickColliding" $ do
     it "removes collisions" $ do
-      let sys = [ Particle 0 (3,0,0) (0,0,0) (0,0,0)
-                , Particle 1 (4,0,0) (0,0,0) (-2,0,0)
-                , Particle 2 (1,0,0) (0,0,0) (1,0,0)
+      let sys = [ Particle 0 (P 3 0 0) (P 0 0 0) (P 0 0 0)
+                , Particle 1 (P 4 0 0) (P 0 0 0) (P (-2) 0 0)
+                , Particle 2 (P 1 0 0) (P 0 0 0) (P 1 0 0)
                 ]
       tickColliding sys `shouldBe` take 1 sys
 
@@ -101,9 +125,9 @@ parser = identify <$> particle `sepBy1` newline
                           <*> ("v=" *> point <* ", ")
                           <*> ("a=" *> point)
     int = signed decimal
-    point = (,,) <$> ("<" *> int)
-                 <*> ("," *> int)
-                 <*> ("," *> int <* ">")
+    point = P <$> ("<" *> int)
+              <*> ("," *> int)
+              <*> ("," *> int <* ">")
 
 exampleSystem = Text.unlines
   ["p=<3,0,0>, v=<2,0,0>, a=<-1,0,0>"
@@ -118,10 +142,9 @@ exampleCollisions = Text.unlines
   ]
 
 tickColliding :: [Particle] -> [Particle]
-tickColliding = L.sortOn pid . removeCollisions . collide . fmap tick
+tickColliding = L.sortOn pid . collide . fmap tick
   where
-    removeCollisions = mconcat . fmap unscathed
-    collide = L.groupOn pos . L.sortOn pos
+    collide = L.concatMap unscathed . L.groupOn pos . L.sortOn pos
     unscathed [x] = [x]
     unscathed _   = []
 
@@ -138,6 +161,6 @@ tick (Particle pid p v a) = Particle pid (translate v' p) v' a
 --
 -- In N dimensions, this applies to all components.
 willInvert :: Particle -> Bool
-willInvert (Particle _ _ v a) = any inverting dimensions
+willInvert (Particle _ _ v a) = any inverting [px, py, pz]
   where
-    inverting (Lens d) = (v ^. d) /= 0 && (a ^. d) /= 0 && (a ^. d < 0) /= (v ^. d < 0)
+    inverting f = f v /= 0 && f a /= 0 && ((f a < 0) /= (f v < 0))
