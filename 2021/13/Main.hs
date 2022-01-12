@@ -15,7 +15,9 @@ import           Data.Set (Set)
 import Elves
 import Elves.Advent
 import Elves.StrictGrid
+import Elves.Coord (origin)
 
+type Coord = Coordinate
 data Paper = Paper { bounds :: (Coord, Coord), dots :: Set Coord }
 newtype Instruction = Instruction (Paper -> Paper)
 

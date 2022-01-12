@@ -1,7 +1,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 
 module Elves.StrictGrid (
-  Coordinate(..), Row(..), Col(..),
+  Coordinate(..), Row(..), Col(..), Delta(..), Acceleration(..),
   move, accelerate, gridP, nextCoords, draw
   ) where
 

@@ -11,8 +11,10 @@ import           Data.Set (Set)
 import Elves
 import Elves.Advent
 import Elves.StrictGrid
+import Elves.Coord (manhattan)
 import qualified Elves.AStar as AS
 
+type Coord = Coordinate
 type Risk = Int
 newtype Grid = Grid { ungrid :: UArray Coord Risk } deriving (Eq)
 

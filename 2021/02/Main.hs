@@ -7,7 +7,6 @@ import qualified Data.Attoparsec.Text as A
 import Text.Parser.Combinators (sepBy1, choice)
 import Text.Parser.Char (newline, text)
 
-import Elves
 import Elves.Advent
 
 newtype Distance = Distance { getDistance :: Int }

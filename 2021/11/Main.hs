@@ -23,6 +23,7 @@ import Elves
 import Elves.Advent
 import Elves.StrictGrid
 
+type Coord = Coordinate
 newtype Octopodes = Grid { octopodes :: UArray Coord Word } deriving (Eq)
 
 instance Show Octopodes where
@@ -201,7 +202,7 @@ test = do
       grid <- parse exampleInput
       fst (runCycles 100 grid) `shouldBe` 1656
 
-    it "can find the firt full flash" $ do
+    it "can find the first full flash" $ do
       grid <- parse exampleInput
       findFirstFullFlash grid `shouldBe` 195
 

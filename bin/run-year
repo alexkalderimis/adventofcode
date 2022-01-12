@@ -1,9 +1,30 @@
 #!/bin/bash
 
-for day in $YEAR/; do
-  echo $day
+set -e
 
-  stack run $YEAR $(basename $day) test
-  stack run $YEAR $(basename $day) pt1
-  stack run $YEAR $(basename $day) pt2
+targets=()
+
+for date in ./"$YEAR"/* ; do
+  day=$(basename $date)
+
+  if test -f $date/Main.hs; then
+    targets+=("build/puzzle_${YEAR}_${day}")
+  fi
+done
+
+make ${targets[*]}
+
+for day in ./"$YEAR"/* ; do
+  if test -f $day/Main.hs; then
+    echo
+    echo "================="
+    echo $day
+    echo "================="
+
+    stack run $YEAR $(basename $day) test
+    echo
+    stack run $YEAR $(basename $day) pt1
+    echo
+    stack run $YEAR $(basename $day) pt2
+  fi
 done

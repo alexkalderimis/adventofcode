@@ -19,10 +19,11 @@ import Elves
 import Elves.Advent
 import Elves.StrictGrid
 
+type Coord = Coordinate
 newtype Depth = Depth { getDepth :: Int } deriving (Show, Eq, Ord, Enum)
-type Basin = Set Coord
+type Basin = Set Coordinate
 
-data HeightMap = HM { heightMap :: Array Coord Depth } deriving (Show, Eq)
+newtype HeightMap = HM { heightMap :: Array Coordinate Depth } deriving (Show, Eq)
 
 main :: IO ()
 main = day 09 parser pt1 pt2 test
@@ -77,7 +78,7 @@ exampleInput =
               ]
    in T.intercalate "\n" lines
 
-localMinima :: HeightMap -> [(Coord, Depth)]
+localMinima :: HeightMap -> [(Coordinate, Depth)]
 localMinima hm = do
   let bs = Array.bounds (heightMap hm)
   (loc, d) <- Array.assocs $ heightMap hm

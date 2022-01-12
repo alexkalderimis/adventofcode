@@ -1,4 +1,8 @@
-module Elves.Advent where
+module Elves.Advent (
+  Part, day, staticDay, namedTime, time,
+  Parser, parseOnly,
+  module X
+  ) where
 
 import           Control.Applicative
 import           Control.Monad
@@ -9,7 +13,7 @@ import           System.Environment
 import           System.Exit
 import           Text.Parser.Char     (newline)
 
-import           Test.Hspec
+import           Test.Hspec as X
 
 type Part a = a -> IO ()
 

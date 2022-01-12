@@ -19,6 +19,7 @@ import           Data.Set (Set)
 import Elves
 import Elves.Advent
 import Elves.StrictGrid
+import Elves.Coord (origin)
 
 -- for the purposes of this puzzle, we know that the target is **always** below the starting position.
 -- we do not need to solve for the general case.
@@ -134,6 +135,7 @@ import Elves.StrictGrid
 --
 --  This puts an upper limit on DV for straight lobs of (baseline - 1).
 
+type Coord = Coordinate
 type Target = (Coord, Coord)
 newtype Steps    = T Int deriving (Show, Eq, Ord, Num, Enum)
 newtype Velocity = V Int deriving (Show, Eq, Ord, Num)
