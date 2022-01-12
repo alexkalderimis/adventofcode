@@ -105,6 +105,8 @@ tests:
     - adventofcode
     - array
     - hspec
+    - hspec-expectations
+    - extra
     - QuickCheck
     - containers
     - lens
