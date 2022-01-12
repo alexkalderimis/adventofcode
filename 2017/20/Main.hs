@@ -16,30 +16,19 @@ import           Text.Parser.Combinators (sepBy1)
 import           Elves
 import           Elves.Advent            (day)
 import           Elves.Coord
+import           Elves.Coord.Strict (Point3(..), px, py, pz)
 import           Elves.RTree             (RTree)
 import qualified Elves.RTree             as RT
 
-data Point = P { px :: {-# UNPACK #-} !Int
-               , py :: {-# UNPACK #-} !Int
-               , pz :: {-# UNPACK #-} !Int
-               } deriving (Eq, Show, Ord)
-
 type ParticleID = Int
 type Distances = M.IntMap [Double]
-
-instance Coord Point where
-  type Dimension Point = Int
-  origin = P 0 0 0
-  dimensions = [ Lens $ lens px (\p i -> p { px = i })
-               , Lens $ lens py (\p i -> p { py = i })
-               , Lens $ lens pz (\p i -> p { pz = i })
-               ]
+type Neighbours = RTree Point3 ()
 
 data Particle = Particle
   { pid :: !ParticleID
-  , pos :: !Point
-  , vol :: !Point
-  , acc :: !Point
+  , pos :: !Point3
+  , vol :: !Point3
+  , acc :: !Point3
   } deriving (Show, Eq)
 
 main :: IO ()
@@ -65,8 +54,7 @@ pt2 sys = do
 
     runWhileApproaching !sys !history =
       let sys'   = tickColliding sys
-          t      = RT.fromPoints $ zip (pos <$> sys') (repeat ())
-          d      = fromJust . distanceToNearest t
+          d      = fromJust . distanceToNearest (neighbours sys')
           dists' = updateDistances d sys' history
        in if length sys' < 2 || all receding dists'
           then sys' -- <$ putStrLn (show n <> " ticks")
@@ -80,7 +68,7 @@ initialDistances :: [Particle] -> Distances
 initialDistances sys = M.fromAscList [ (pid p, []) | p <- sys ]
 
 {-# INLINE updateDistances #-}
-updateDistances :: (Point -> Double) -> [Particle] -> Distances -> Distances
+updateDistances :: (Point3 -> Double) -> [Particle] -> Distances -> Distances
 updateDistances d sys history = M.fromAscList $ do
   p <- sys
   let curr = d (pos p)
@@ -88,33 +76,36 @@ updateDistances d sys history = M.fromAscList $ do
       now = take 2 (curr : prev)
   now `seq` pure (pid p, now)
 
+{-# INLINE neighbours #-}
+neighbours :: [Particle] -> Neighbours
+neighbours sys = RT.fromPoints $ zip (pos <$> sys) (repeat ())
+
 {-# INLINE distanceToNearest #-}
-distanceToNearest :: RTree Point () -> Point -> Maybe Double
-distanceToNearest t p = measure p . foundPoint <$> RT.nearestNeighbour measure p t
+distanceToNearest :: Neighbours -> Point3 -> Maybe Double
+distanceToNearest t p = measure p . foundPoint <$> RT.nearestNeighbour straightLine p t
   where
-    foundPoint :: (Bounds Point, ()) -> Point
+    foundPoint :: (Bounds Point3, ()) -> Point3
     foundPoint = fst . fst
-    measure :: Point -> Point -> Double
     measure = straightLine
 
 test = do
   describe "example system" $ do
     let esys = parseOnly parser exampleSystem
     it "parsed correctly" $ do
-      esys `shouldBe` Right [ Particle 0 (P 3 0 0) (P 2 0 0) (P (-1) 0 0)
-                            , Particle 1 (P 4 0 0) (P 0 0 0) (P (-2) 0 0)
+      esys `shouldBe` Right [ Particle 0 (P3 3 0 0) (P3 2 0 0) (P3 (-1) 0 0)
+                            , Particle 1 (P3 4 0 0) (P3 0 0 0) (P3 (-2) 0 0)
                             ]
     context "given successful parsing" $ do
       let (Right sys) = esys
       it "ticks correctly" $ do
-        (fmap pos . (!! 3) $ iterate tickColliding sys) `shouldBe` [P 3 0 0, P (-8) 0 0]
+        (fmap pos . (!! 3) $ iterate tickColliding sys) `shouldBe` [P3 3 0 0, P3 (-8) 0 0]
       it "knows which particles are going to invert" $ do
         fmap willInvert sys `shouldBe` [True,False]
   describe "tickColliding" $ do
     it "removes collisions" $ do
-      let sys = [ Particle 0 (P 3 0 0) (P 0 0 0) (P 0 0 0)
-                , Particle 1 (P 4 0 0) (P 0 0 0) (P (-2) 0 0)
-                , Particle 2 (P 1 0 0) (P 0 0 0) (P 1 0 0)
+      let sys = [ Particle 0 (P3 3 0 0) (P3 0 0 0) (P3 0 0 0)
+                , Particle 1 (P3 4 0 0) (P3 0 0 0) (P3 (-2) 0 0)
+                , Particle 2 (P3 1 0 0) (P3 0 0 0) (P3 1 0 0)
                 ]
       tickColliding sys `shouldBe` take 1 sys
 
@@ -125,9 +116,9 @@ parser = identify <$> particle `sepBy1` newline
                           <*> ("v=" *> point <* ", ")
                           <*> ("a=" *> point)
     int = signed decimal
-    point = P <$> ("<" *> int)
-              <*> ("," *> int)
-              <*> ("," *> int <* ">")
+    point = P3 <$> ("<" *> int)
+               <*> ("," *> int)
+               <*> ("," *> int <* ">")
 
 exampleSystem = Text.unlines
   ["p=<3,0,0>, v=<2,0,0>, a=<-1,0,0>"
