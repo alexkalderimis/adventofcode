@@ -38,7 +38,7 @@ instance Arbitrary Region where
   shrink (Region r) = fmap Region .filter (/= r) . fmap (squeeze r) $ [Lens _1, Lens _2]
 
 -- cube defined as range from lower-bound to upper-bound
-newtype Cube = Cube { getCube :: (Dim3, Dim3) } deriving (Show, Eq)
+newtype Cube = Cube { getCube :: (Dim3, Dim3) } deriving (Show, Eq, Ord)
 
 cubeSize :: Cube -> Int
 cubeSize = Ix.rangeSize . getCube

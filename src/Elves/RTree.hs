@@ -1,19 +1,20 @@
+{-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE DeriveFunctor     #-}
 {-# LANGUAGE DeriveGeneric     #-}
-{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE UndecidableInstances #-}
-{-# LANGUAGE ConstraintKinds #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TupleSections #-}
+{-# LANGUAGE UndecidableInstances #-}
 
 module Elves.RTree (
-  Extendable, Queryable, QueryStrategy(..), RTree,
-  singleton, region, point, bounds, bounds', indexed, locations, assocs, elems,
+  Extendable, Bounds, Queryable, QueryStrategy(..), RTree,
+  singleton, region, point, bounds, bounds', indexed, locations, assocs, elems, keys,
   maxPageSize, size, sizeWith, extent, null,
   fromList, fromPoints, fromPointsWith, fromListWith, 
   alter, alterM, delete, insert, insertPoint, insertWith, empty,
   unions, union, unionWith,
-  subtrees, leaves, forest, fromTree, depth,
+  subtrees, leaves, forest, fromTree, depth, minDepth,
   query, popQuery, member, lookup, nearestNeighbour, nearestNeighbourK, nearestNeighbours,
   expandQuery, drawTree, diffTree, overlapping
   ) where
@@ -99,12 +100,12 @@ shrinkList (x:xs) = let xss = shrinkList xs
                           shrunk -> [x' : xs' | x' <- shrunk, xs' <- xss ]
 
 missing1 :: [a] -> [[a]]
-missing1 xs = [pref ++ drop 1 suff | n <- [0 .. length xs - 1]
-                                 , let (pref,suff) = L.splitAt n xs
+missing1 xs = [pref <> drop 1 suff | n <- [0 .. length xs - 1]
+                                   , let (pref,suff) = L.splitAt n xs
               ]
 
 singleton :: Bounds i -> a -> RTree i a
-singleton (lb, ub) a = Leaf lb ub a
+singleton (lb, ub) = Leaf lb ub
 
 region :: (HasCallStack, Ord (Dimension i), Coord i) => NonEmpty (RTree i a) -> RTree i a
 region ts = case NE.filter (not . null) ts of
@@ -134,27 +135,18 @@ instance (Extendable i, Semigroup a) => Semigroup (RTree i a) where
 instance (Extendable i, Semigroup a) => Monoid (RTree i a) where
   mempty = empty
   mappend = (<>)
+  mconcat ts = case ts of
+                 []  -> empty
+                 [t] -> t
+                 _   -> fromListWith (<>) (ts >>= assocs)
 
-instance Eq2 RTree where
-  liftEq2 eqi eqa t1 t2 =
-      size t1 == size t2 && liftEq (liftEq2 (eqtup eqi) eqa) (assocs t1) (assocs t2)
-
-eqtup :: (a -> b -> Bool) -> (a,a) -> (b,b) -> Bool
-eqtup f a b = (fst a `f` fst b) && (snd a `f` snd b)
-
-instance Eq i => Eq1 (RTree i) where
-    liftEq = liftEq2 (==)
-
-instance (Coord i, Ord i, Ord a, Real (Dimension i)) => Ord (RTree i a) where
-  compare t1 t2 = let sorted = L.sortBy (comparing fst) . assocs
+instance (Ord i, Ord a) => Ord (RTree i a) where
+  compare t1 t2 = let sorted = L.sortOn fst . assocs
                    in compare (sorted t1) (sorted t2)
 
--- to avoid exposing internal structure, the EQ instance
--- requires Ord instances of its components
-instance (Coord i, Real (Dimension i), Eq i, Eq a) => Eq (RTree i a) where
-  a == b = case bounds a <|> bounds b of
-             Nothing -> True
-             Just (lb,_) -> priorityOrder straightLine lb a == priorityOrder straightLine lb b
+-- to avoid exposing internal structure, the EQ instance requires Ord instances of its components
+instance (Ord i, Ord a) => Eq (RTree i a) where
+  a == b = EQ == compare a b
 
 {-# INLINE point #-}
 point :: Coord i => i -> Bounds i
@@ -182,8 +174,9 @@ indexed Tip            = Tip
 indexed (Leaf i j a)   = Leaf i j ((i,j), a)
 indexed (Region i j ts) = Region i j (indexed <$> ts)
 
-locations :: RTree i a -> [Bounds i]
+locations, keys :: RTree i a -> [Bounds i]
 locations = F.toList . fmap fst . indexed
+keys = locations
 
 assocs :: RTree i a -> [((i,i),a)]
 assocs = F.toList . indexed
@@ -204,55 +197,108 @@ fromList :: (Extendable i) => [(Bounds i, a)] -> RTree i a
 fromList = fromListWith pure
 
 fromPoints :: (Extendable i) => [(i, a)] -> RTree i a
-fromPoints ps
-  | t <- bulkLoadPoints ps
-  , longerThan (2 * maxPageSize t) ps
+fromPoints = fromPointsWith pure
+
+-- indexing points is easier - we just need the bounding boxes, and do not
+-- have to worry about overlapping regions.
+{-# INLINE fromPointsWith #-}
+fromPointsWith :: (Extendable i) => (a -> a -> a) -> [(i, a)] -> RTree i a
+fromPointsWith _ [] = empty
+fromPointsWith f ps
+  | [(k,v)] <- ps'
+  = singleton (k, k) v
+
+  | t <- bulkLoadPoints ps'
+  , longerThan (maxPageSize t) ps'
   = t
 
-  | otherwise = fromList [ ((p,p), x) | (p, x) <- ps ]
+  | otherwise = region (NE.fromList [ singleton (point p) x | (p, x) <- ps' ])
+  where 
+    ps' = ungroup f ps
 
 bulkLoadPoints :: (Extendable i) => [(i, a)] -> RTree i a
 bulkLoadPoints ps
-  = let seeds'  = fmap (\r -> (r, [])) $ seeds [ (fst p, fst p) | p <- ps ]
+  = let seeds'  = (, []) <$> seeds [ (fst p, fst p) | p <- ps ]
         buckets = F.foldl' place seeds' ps
      in untip $ region ( fromPoints . snd <$> buckets )
   where
     -- find the first place we can put the point.
     place ((r, ps) :| tl) p = if Coord.containsP (fst p) r
                                 then (r, p : ps) :| tl
-                                else let tl' = maybe [] (NE.toList . (`place` p)) (NE.nonEmpty tl)
+                                else let tl' = foldMap (NE.toList . (`place` p)) (NE.nonEmpty tl)
                                       in (r, ps) :| tl'
-
-fromPointsWith :: (Extendable i) => (a -> a -> a) -> [(i, a)] -> RTree i a
-fromPointsWith f ps = fromListWith f [ ((p,p), x) | (p, x) <- ps ]
 
 fromListWith :: forall i a. (Extendable i)
              => (a -> a -> a) -> [(Bounds i, a)] -> RTree i a
 fromListWith f kvs =
   let tip = Tip :: RTree i a
       pageSize = maxPageSize tip
-   in case kvs of
-        []                -> tip
-        [a]               -> singleton' a
-        _ | lots pageSize -> bulkLoad [ (head ks, L.foldl1 f vs) | grp <- L.groupOn fst (L.sortOn fst kvs)
-                                      , let (ks, vs) = unzip grp
-                                      ]
-        _ -> let kvs' = dedupe kvs
-                 (init, rest) = L.splitAt pageSize kvs'
-                 t0 = region (singleton' <$> NE.fromList init)
-              in L.foldl' (\t (k, a) -> insertWith f k a t) t0 rest
+   in case ungroup f kvs of
+        []  -> tip
+        [a] -> singleton' a
+        xs  -> if longerThan pageSize xs
+               then bulkLoad xs
+               else region (singleton' <$> NE.fromList xs)
   where
-    lots n = longerThan (2 * n) kvs
     singleton' (k,v) = singleton k v
-    dedupe = fmap (\grp -> (fst (head grp), foldl1 f (snd <$> grp))) . L.groupOn fst . L.sortOn fst
 
+-- group by keys, and then eliminate the groups with the monoidal function
+{-# INLINE ungroup #-}
+ungroup :: Ord k => (a -> a -> a) -> [(k, a)] -> [(k, a)]
+ungroup f kvs = [ (head ks, L.foldl1 f vs) | grp <- L.groupOn fst (L.sortOn fst kvs)
+                                           , let (ks, vs) = unzip grp
+                                           ]
+
+-- general indexing is complicated. We prefer the smaller groups if we can
+-- (fitting to the closest corner). Since keys can extend over a range of the area,
+-- we need to repack the groups so that none is too large/small.
+--
+-- For instance, imagine the 1D ranges:
+--
+--  0-----------------10
+--      2-------------10
+--           5--------10
+--               7----10
+--                  9-10
+--
+-- These are all close to the `10` "corner", even though the bounds
+-- of these ranges overall is `0..10`. We may need to move some of these
+-- ranges to the `0` corner, even though they have more overlap with the `10`
+-- corner.
+--
+-- Also, due to integer division, we would have a `bestSize` here of 2, but
+-- one group will need to be given 3 ranges.
 bulkLoad :: Extendable i => [(Bounds i, a)] -> RTree i a
-bulkLoad kvs = let box = L.foldl1 expandB (fst <$> kvs)
-                   seeds = [Region p p (pure Tip) | p <- Coord.corners box]
-                   t = Region (fst box) (snd box) (NE.fromList seeds)
-                in deepuntip $ F.foldl' (\t (k, v) -> insert k v t) t kvs
+bulkLoad kvs
+  = let buckets = take (length cnrs) $ bucketOn (bestCnr cnrs) kvs <> repeat []
+        (trimmed, overflows) = unzip $ fmap (L.splitAt bestSize) buckets
+        filled = allocateOverhang $ L.foldl'
+                     (\(unclaimed, fixed) b ->
+                        let (extra, unclaimed') = L.splitAt (bestSize - length b) unclaimed
+                        in (unclaimed', (b <> extra) : fixed))
+                     (concat overflows, [])
+                     trimmed
+        ts = fromList <$> filled
+     in if sum (length <$> filled) /= length kvs
+           then error ("expected " <> show (length kvs) <> ", got " <> show (sum $ fmap length filled))
+           else untip $ region (NE.fromList ts)
+  where
+    box = L.foldl1 expandB (fst <$> kvs)
+    cnrs = Coord.corners box
+
+    bestSize = length kvs `div` length cnrs
+
+    bestCnr cs (k, a) = L.minimumOn (measure k) cs
+    measure k cnr = uncurry Coord.size (expandB k (cnr, cnr))
+
+    bucketOn f xs = fmap (fmap snd) . L.groupOn fst $ L.sortOn fst [ (f x, x) | x <- xs ]
+
+    -- the use of `div` in calculating bestSize means we may have an overhang.
+    allocateOverhang (overhang, grps) = let (some, rest) = L.splitAt (length overhang) grps
+                                         in zipWith (:) overhang some <> rest
 
 -- a set of bounds, equally dividing up the total space
+{-# INLINE seeds #-}
 seeds :: forall i a. Extendable i => [Bounds i] -> NonEmpty (Bounds i)
 seeds bs
   = let dims = dimensions
@@ -347,7 +393,7 @@ unionWith f Tip right = right
 unionWith f left Tip  = left
 unionWith f l@(Leaf i j a) r = insertWith f (i,j) a r
 unionWith f l r@(Leaf i j a) = insertWith (flip f) (i,j) a l
-unionWith f l r = L.foldl' (\t leaf -> unionWith f leaf t) r (leaves l)
+unionWith f l r = L.foldl' (flip (unionWith f)) r (leaves l)
 
 sortKids :: (Ord i) => NonEmpty (RTree i a) -> NonEmpty (RTree i a)
 sortKids = NE.sortBy (comparing bounds)
@@ -411,7 +457,7 @@ joinOverlapping (t :| ts)
       (xs, ys) -> unions xs :| ys
 
 -- does this tree collide with these bounds? (i.e. are the bounds identical)
-collides bs = maybe False (== bs) . bounds
+collides bs = (Just bs ==) . bounds
 
 -- choose the child that needs the smallest expansion to contain the child,
 -- in a tie, choose the child that is closest in extent to the child itself.
@@ -510,7 +556,7 @@ contains :: (Coord i, Ord (Dimension i), Num (Dimension i))
 contains a b = fromMaybe False $ liftA2 Coord.contains (bounds b) (bounds a)
 
 includes :: (Coord k, Ord (Dimension k)) => Bounds k -> RTree k a -> Bool
-includes bs t = fromMaybe False (Coord.contains bs <$> bounds t)
+includes bs = maybe False (Coord.contains bs) . bounds
 
 overlapping :: (Coord i, Num (Dimension i), Ord (Dimension i))
             => RTree i a -> RTree i a -> Bool
@@ -530,7 +576,7 @@ sizeWith t0 t1 = maybe 0 (uncurry Coord.size) $
 
 -- the space covered by this tree - including empty space.
 extent :: (Coord i, Extent (Dimension i)) => RTree i a -> Dimension i
-extent = fromMaybe 0 . fmap (uncurry Coord.size) . bounds
+extent = maybe 0 (uncurry Coord.size) . bounds
 
 boundingBox :: (HasCallStack, Ord (Dimension i), Coord i) => NonEmpty (RTree i a) -> Bounds i
 boundingBox ts = let (b :| bs) = bounds' <$> ts in L.foldl' expandB b bs
@@ -561,7 +607,7 @@ instance (Queryable i, Show i, Eq a, Show a) => ShowDiff (RTree i a) where
 
 diffTree :: (Queryable i, Eq a) => RTree i a -> RTree i a -> [(Bounds i, Where a a)]
 diffTree a b = do
-  q <- concat . fmap (take 1) . L.group $ L.sort (locations a <> locations b)
+  q <- concatMap (take 1) . L.group $ L.sort (locations a <> locations b)
   case (lookup q a, lookup q b) of
     (Nothing, Just x)  -> pure (q, InRight x)
     (Just x, Nothing)  -> pure (q, InLeft x)
@@ -571,10 +617,12 @@ diffTree a b = do
 longerThan :: Int -> [a] -> Bool
 longerThan n xs = case xs of
   [] -> False
-  (_ : tl) -> if n <= 0 then True else longerThan (n - 1) tl
+  (_ : tl) -> n <= 0 || longerThan (n - 1) tl
 
 depth :: RTree i a -> Int
-depth = go 0
-  where
-    go n (Region _ _ ts) = F.maximum (go (n + 1) <$> ts)
-    go n t = n
+depth (Region _ _ ts) = 1 + F.maximum (depth <$> ts)
+depth t = 0
+
+minDepth :: RTree i a -> Int
+minDepth (Region _ _ ts) = 1 + F.minimum (minDepth <$> ts)
+minDepth t = 0

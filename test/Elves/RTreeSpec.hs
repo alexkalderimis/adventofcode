@@ -1,4 +1,3 @@
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE NumericUnderscores #-}
 
@@ -11,12 +10,12 @@ import           Control.Category         ((>>>))
 import           Control.Concurrent       (threadDelay)
 import qualified Control.Concurrent.Async as Async
 import           Control.Exception.Base   (Exception)
-import           Control.Lens             hiding (index, equality)
+import           Control.Lens             hiding (index, equality, elements)
 import           Control.Monad.Trans.Writer.CPS (Writer, runWriter, tell)
 import qualified Data.Foldable            as F
 import           Data.Functor.Compose
 import qualified Data.Ix                  as Ix
-import qualified Data.List                as L
+import qualified Data.List.Extra          as L
 import           Data.List.NonEmpty       (NonEmpty (..))
 import qualified Data.List.NonEmpty       as NE
 import           Data.Semigroup           (Sum(..), All(..), sconcat)
@@ -32,6 +31,7 @@ import qualified Elves.RTree              as RT
 
 import Support.BoundingBoxes (Dim2, Dim3, Cube(..), Range(..))
 import Support.RTreeSupport
+import Support
 
 spec :: Spec
 spec = describe "Elves.RTree" $ do
@@ -51,6 +51,8 @@ spec = describe "Elves.RTree" $ do
   stackOfCardsSpec
   lawsSpec
   decontructionSpec
+  fromPointsSpec
+  fromListSpec
 
 decontructionSpec = describe "deconstruct" $ do
   describe "leaves" $ do
@@ -60,58 +62,65 @@ decontructionSpec = describe "deconstruct" $ do
     specify "sconcat (subtrees t) === t" $ property $ \t ->
       sconcat (subtrees t) `eq` (t :: RTree Dim3 (Sum Word))
 
-sizeSpec = describe "size" $ do
+fromPointsSpec = describe "fromPoints" $ do
+  let z = RT.empty :: RTree Dim3 Bool
+      tree ps = fromPoints ps :: RTree Dim3 Bool
 
-  describe "fromPoints" $ do
-    it "always has the size of the elements you put in it" $ property $ \(Unique elems) ->
-      let t = fromPoints elems in size (t :: Dim3Set) === length elems
+  it "always has the size of the elements you put in it" . property $ \(UniqueKeys elems) ->
+    size (tree elems) === length elems
 
-    describe "counterexample-1" $ do
-      let ps = [(-19,-2,-3)
-               ,(-24,-23,18)
-               ,(25,-20,2)
-               ,(-19,1,11)
-               ,(2,-19,-26)
-               ,(12,-7,-5)
-               ,(6,-3,4)
-               ,(-20,4,7)
-               ,(16,-4,-26)
-               ,(-24,-17,14)
-               ,(-4,-4,8)
-               ,(-14,23,22)
-               ,(-21,0,-15)
-               ,(-13,24,16)
-               ,(8,18,20)
-               ,(-7,-3,17)
-               ,(13,-22,-8)
-               ,(-22,14,1)
-               ,(8,-21,-4)
-               ,(-2,4,-18)
-               ,(10,-16,-25)
-               ,(-18,14,1)
-               ]
-          t = fromPoints [ (p, ()) | p <- ps ] :: Dim3Set
-      it "has the correct size" $ do
-        size t `shouldBe` length ps
-      it "has the correct elems" $ do
-        fmap (fst . fst) (assocs t) `shouldMatchList` ps
-  
-  describe "fromList" $ do
-    it "always has the size of the elements you put in it" $ property $ \(Unique elems) ->
-      let t = fromList elems in size (t :: Dim3Set) === length elems
+  it "is equivalent to 'fromList . fmap (first point)'" . property $ \(UniqueKeys elems) ->
+    let kvs = first point <$> elems
+     in fromList kvs `shouldBe` tree elems
+
+  it "is equivalent to inserting each element" . property $ \(UniqueKeys elems) ->
+    L.foldl' (\t (k, v) -> RT.insert (k,k) v t) z elems `shouldBe` fromPoints elems
+
+  specify "all points are in the tree" . property $ \(UniqueKeys elems) ->
+    fmap (point . fst) elems `shouldAll` (`beMemberOf` tree elems)
+
+  specify "we can recover the keys and elems" . property $ \(UniqueKeys xs) -> do
+    let t = tree xs
+
+    fmap (first fst) (assocs t) `shouldContainExactly` xs
+    fmap fst (keys t) `shouldContainExactly` fmap fst xs
+    elems t `shouldContainExactly` fmap snd xs
+
+fromListSpec = describe "fromList" $ do
+  let z = RT.empty :: RTree Dim3 Word
+      tree ps = fromList (first getCube <$> ps) :: RTree Dim3 Word
+
+  it "always has the size of the elements you put in it" . property $ \(UniqueKeys elems) ->
+    size (tree elems) === length elems
+
+  it "is equivalent to inserting each element" . property $ \(UniqueKeys elems) ->
+    L.foldl' (\t (k, v) -> RT.insert (getCube k) v t) z elems `shouldBe` tree elems
+
+  specify "all points are in the tree" . property $ \(UniqueKeys elems) ->
+    fmap (getCube . fst) elems `shouldAll` (`beMemberOf` tree elems)
+
+  specify "we can recover the input, keys and elems" . property $ \(UniqueKeys xs) -> do
+    let t = tree xs
+
+    assocs t `shouldContainExactly` fmap (first getCube) xs
+    keys t `shouldContainExactly` fmap (getCube . fst) xs
+    elems t `shouldContainExactly` fmap snd xs
+
+sizeSpec = specify "size t === length (elems t)" . treeProperty $ \t ->
+  size t === length (elems t)
 
 querySpec = describe "query" $ do
-    it "no-false-positives" $ property $ \e elems ->
+    specify "no-false-positives" . property $ \e elems ->
       let t = tree $ filter (/= e) elems
        in query1 e t === []
-    it "no-false-negatives-insertPoint" $ property $ \e elems ->
+    specify "no-false-negatives-insertPoint" . property $ \e elems ->
       let t = tree elems
        in query1 e (insertPoint e () t) === [(e,())]
-    it "no-false-negatives" $ property $ \e elems ->
+    specify "no-false-negatives" . property $ \e elems ->
       let t = fromPoints (e : elems)
        in query1 (fst e) t === [e]
     describe "any strategy" $ do
-      it "no-false-negatives" $ property $ \strategy e elems ->
+      specify "no-false-negatives" . property $ \strategy e elems ->
         let t = RT.fromList [(getCube x, ()) | x <- e : elems ]
          in (getCube e, ()) `elem` query strategy (getCube e) t
 
@@ -306,7 +315,7 @@ insertSpec = describe "insert" $ do
           d = singleton (( 5, 13), ( 9, 20)) "D"
           e = singleton (( 2,  6), ( 8, 16)) "E"
           f = singleton (( 3,  3), ( 6, 17)) "F"
-      forM_ [a,b,c,d] $ flip consider $ do
+      forM_ [a,b,c,d] . flip consider $ do
         which "overlaps e" (`shouldSatisfy` overlapping e)
         which "overlaps f" (`shouldSatisfy` overlapping f)
       consider f $ do
@@ -317,12 +326,12 @@ insertSpec = describe "insert" $ do
         which "overlaps e" (`shouldSatisfy` overlapping e)
       describe "the concatenation of these trees" $ do
         let t = mconcat [a,b,c,d,e,f]
-        it "has six elements" $ property $ do
+        it "has six elements" . property $ do
           size t `shouldBe` 6
         it "is two layers deep" $ do
           QC.counterexample ("depth (" <> show t <> ")") (depth t `shouldBe` 2)
 
-    it "increases-size" $ property $ \t i -> QC.within 100000 $ do
+    it "increases-size" . property $ \t i -> do
       let delta = maybe 1 (pure 0) (lookup (i,i) t)
           t' = insertPoint (i :: Dim3) () t
       size t + delta `shouldBe` size t'
@@ -595,7 +604,6 @@ oneDBools = describe "1D-Bool"  $ do
 oneDBoolCounterExamples = do
   let oneDB = (cast :: Cast (RTree Int All))
       is = eq :: Comparator (RTree Int All)
-      t_o = 20000
       sgCounter name a b c = describe name $ do
         let l_assoc = (a <> b) <> c
             r_assoc = a <> (b <> c)
@@ -608,8 +616,8 @@ oneDBoolCounterExamples = do
         --   putStrLn "C:"
         --   putStrLn (drawTree c)
 
-        it "has same size" $ QC.within t_o (size l_assoc === size r_assoc)
-        it "comparesEq"    $ QC.within t_o (l_assoc `is` r_assoc)
+        it "has same size" $ size l_assoc === size r_assoc
+        it "comparesEq"    $ l_assoc `is` r_assoc
 
   sgCounter "counter-example-1"
      (All <$> RT.fromList [((1,4), False)])
@@ -617,17 +625,18 @@ oneDBoolCounterExamples = do
      (All <$> RT.fromList [((4,7), False), ((5,10), False), ((3,6), True)])
 
   describe "counter-example-2" $ do
+    let it' s = it s . QC.within 1000
     let t = RT.fromList [((-62,-19), All False)
                         ,(( 39,47),  All False)
                         ,(( 53,77),  All True)
                         ,(( 61,68),  All True)
                         ,(( 67,74),  All False)
                         ]
-    it "has the correct size" $ QC.within 1000 $ do
+    it' "has the correct size" $ do
       size t == 5
-    it "does not change when adding mempty" $ QC.within 1000 $ do
+    it' "does not change when adding mempty" $ do
       (mempty <> t) `is` t
-    it "does not change when adding to mempty" $ QC.within 1000 $ do
+    it' "does not change when adding to mempty" $ do
       (t <> mempty) `is` t
 
   sgCounter "counter-example-3"
@@ -716,6 +725,219 @@ oneDBoolCounterExamples = do
                  , ((62,79),False),((67,82),True),((71,75),False),((72,89),False)
                  , ((74,77),False),((73,73),False)
                  ])
+
+  describe "counter-example-11" $ do
+    let a = fromList [((18,21),All {getAll = True})
+                        ,((17,24),All {getAll = True})
+                        ,((18,18),All {getAll = True})
+                        ,((10,28),All {getAll = True})
+                        ,((11,19),All {getAll = False})
+                        ,((10,17),All {getAll = True})
+                        ,((-1,15),All {getAll = False})
+                        ,((3,7),All {getAll = True})
+                        ,((0,12),All {getAll = False})
+                        ,((-16,8),All {getAll = False})
+                        ,((-3,2),All {getAll = True})
+                        ]
+    let b = fromList [((19,26),All {getAll = False})
+                        ,((18,24),All {getAll = False})
+                        ,((10,19),All {getAll = True})
+                        ,((-16,19),All {getAll = True})
+                        ,((10,10),All {getAll = True})
+                        ,((-4,4),All {getAll = True})
+                        ,((-5,9),All {getAll = False})
+                        ,((-10,7),All {getAll = False})
+                        ,((-12,0),All {getAll = True})
+                        ,((-13,-10),All {getAll = True})
+                        ,((-15,-5),All {getAll = False})
+                        ,((-19,17),All {getAll = True})
+                        ,((-16,-5),All {getAll = False})
+                        ]
+    let c = fromList [((19,25),All {getAll = True})
+                        ,((12,24),All {getAll = True})
+                        ,((13,20),All {getAll = False})
+                        ,((8,21),All {getAll = True})
+                        ,((12,18),All {getAll = True})
+                        ,((9,19),All {getAll = False})
+                        ,((12,12),All {getAll = True})
+                        ,((6,19),All {getAll = True})
+                        ,((8,10),All {getAll = True})
+                        ,((-7,15),All {getAll = False})
+                        ,((1,3),All {getAll = True})
+                        ,((-2,10),All {getAll = True})
+                        ,((-6,4),All {getAll = True})
+                        ,((-16,9),All {getAll = True})
+                        ,((-12,-3),All {getAll = True})
+                        ,((-13,1),All {getAll = False})
+                        ]
+    let d = fromList [((8,13),All {getAll = True})
+                         ,((-19,-1),All {getAll = True})
+                         ,((-8,-3),All {getAll = True})
+                         ,((-16,-4),All {getAll = False})]
+    let e = fromList [((13,15),All {getAll = False})
+                          ,((-12,19),All {getAll = True})
+                          ,((9,10),All {getAll = True})
+                          ,((3,13),All {getAll = True})
+                          ,((4,4),All {getAll = True})
+                          ,((1,10),All {getAll = True})
+                          ,((-2,1),All {getAll = True})
+                          ,((-5,3),All {getAll = True})
+                          ,((-16,6),All {getAll = False})
+                          ,((-12,0),All {getAll = True})
+                          ,((-13,3),All {getAll = False})
+                          ,((-17,4),All {getAll = False})]
+    let f = fromList [((19,26),All {getAll = True})
+                          ,((9,13),All {getAll = True})
+                          ,((1,11),All {getAll = False})
+                          ,((3,10),All {getAll = True})
+                          ,((-10,0),All {getAll = True})
+                          ,((-19,-14),All {getAll = False})]
+    let g = fromList [((13,16),All {getAll = True})
+                          ,((12,17),All {getAll = False})
+                          ,((2,20),All {getAll = True})
+                          ,((11,14),All {getAll = False})
+                          ,((8,15),All {getAll = False})
+                          ,((7,8),All {getAll = False})
+                          ,((3,11),All {getAll = False})
+                          ,((2,17),All {getAll = False})
+                          ,((-8,16),All {getAll = True})
+                          ,((2,6),All {getAll = False})
+                          ,((-1,6),All {getAll = True})
+                          ,((-2,2),All {getAll = True})
+                          ,((-13,10),All {getAll = True})
+                          ,((-10,-2),All {getAll = True})
+                          ,((-12,-2),All {getAll = True})
+                          ,((-10,-7),All {getAll = False})
+                          ,((-18,-4),All {getAll = True})
+                          ,((-16,-10),All {getAll = True})]
+    let h = fromList [((19,19),All {getAll = True})
+                          ,((-15,8),All {getAll = False})
+                          ,((-8,6),All {getAll = True})
+                          ,((-11,-6),All {getAll = False})]
+    let i = fromList [((18,21),All {getAll = False})
+                          ,((8,20),All {getAll = True})
+                          ,((18,18),All {getAll = True})
+                          ,((9,17),All {getAll = True})
+                          ,((4,19),All {getAll = True})
+                          ,((-6,16),All {getAll = True})
+                          ,((3,5),All {getAll = False})
+                          ,((-1,9),All {getAll = False})
+                          ,((-3,15),All {getAll = False})
+                          ,((-4,-1),All {getAll = False})
+                          ,((-9,13),All {getAll = False})
+                          ,((-6,9),All {getAll = False})
+                          ,((-8,0),All {getAll = True})
+                          ,((-13,-10),All {getAll = False})
+                          ,((-18,-16),All {getAll = False})]
+    let j = fromList [((14,16),All {getAll = True})
+                          ,((12,20),All {getAll = True})
+                          ,((9,13),All {getAll = True})
+                          ,((6,10),All {getAll = True})
+                          ,((1,2),All {getAll = True})]
+    let k = fromList [((12,14),All {getAll = False})
+                          ,((10,15),All {getAll = False})
+                          ,((11,13),All {getAll = True})
+                          ,((3,18),All {getAll = False})
+                          ,((-7,16),All {getAll = True})
+                          ,((1,2),All {getAll = False})
+                          ,((-5,10),All {getAll = False})
+                          ,((-15,12),All {getAll = False})
+                          ,((-10,4),All {getAll = True})
+                          ,((-11,10),All {getAll = False})
+                          ,((-16,-10),All {getAll = False})
+                          ,((-19,-12),All {getAll = False})
+                          ,((-17,-15),All {getAll = True})]
+    let l = fromList [((6,15),All {getAll = True})
+                          ,((3,18),All {getAll = False})
+                          ,((0,13),All {getAll = True})
+                          ,((-1,13),All {getAll = True})
+                          ,((-5,10),All {getAll = False})
+                          ,((-5,1),All {getAll = False})
+                          ,((-7,-4),All {getAll = True})
+                          ,((-14,-4),All {getAll = True})
+                          ,((-18,-17),All {getAll = True})]
+    let m = fromList [((17,18),All {getAll = True})
+                          ,((16,19),All {getAll = False})
+                          ,((12,20),All {getAll = True})
+                          ,((16,18),All {getAll = True})
+                          ,((12,19),All {getAll = True})
+                          ,((-7,1),All {getAll = True})
+                          ,((-10,8),All {getAll = True})]
+    let n = fromList [((17,22),All {getAll = True})
+                        ,((16,30),All {getAll = False})
+                        ,((15,22),All {getAll = False})
+                        ,((13,20),All {getAll = True})
+                        ,((14,18),All {getAll = False})
+                        ,((-7,17),All {getAll = True})
+                        ,((9,10),All {getAll = True})
+                        ,((5,14),All {getAll = True})
+                        ,((4,16),All {getAll = False})
+                        ,((-4,6),All {getAll = False})
+                        ,((-6,-5),All {getAll = True})
+                        ,((-15,10),All {getAll = True})
+                        ,((-14,-10),All {getAll = False})
+                        ,((-18,4),All {getAll = True})
+                        ,((-15,-2),All {getAll = True})]
+    let o = fromList [((6,10),All {getAll = True})
+                        ,((5,12),All {getAll = False})
+                        ,((-16,12),All {getAll = True})
+                        ,((-4,-3),All {getAll = False})
+                        ,((-11,2),All {getAll = False})
+                        ,((-11,-5),All {getAll = False})
+                        ,((-18,-15),All {getAll = True})]
+    let p = fromList [((16,17),All {getAll = False})
+                        ,((-2,19),All {getAll = True})
+                        ,((10,14),All {getAll = True})
+                        ,((6,9),All {getAll = False})
+                        ,((4,12),All {getAll = False})
+                        ,((4,8),All {getAll = True})
+                        ,((-18,11),All {getAll = True})
+                        ,((-11,2),All {getAll = True})]
+    let q = fromList [((-15,-9),All {getAll = False})]
+    let r = fromList [((18,21),All {getAll = False})
+                          ,((16,29),All {getAll = False})
+                          ,((18,20),All {getAll = False})
+                          ,((18,19),All {getAll = False})
+                          ,((7,20),All {getAll = False})
+                          ,((15,19),All {getAll = False})
+                          ,((14,19),All {getAll = False})
+                          ,((12,13),All {getAll = True})
+                          ,((9,10),All {getAll = True})
+                          ,((-9,19),All {getAll = False})
+                          ,((3,14),All {getAll = True})
+                          ,((3,8),All {getAll = False})
+                          ,((2,12),All {getAll = False})
+                          ,((-1,2),All {getAll = False})
+                          ,((-1,1),All {getAll = False})
+                          ,((-5,-5),All {getAll = True})
+                          ,((-16,17),All {getAll = True})
+                          ,((-17,-10),All {getAll = False})
+                          ,((-18,-17),All {getAll = True})]
+    let s = fromList [((17,18),All {getAll = False})
+                        ,((15,23),All {getAll = False})
+                        ,((5,20),All {getAll = False})
+                        ,((14,16),All {getAll = False})
+                        ,((-10,16),All {getAll = False})
+                        ,((-1,2),All {getAll = True})
+                        ,((-2,8),All {getAll = False})
+                        ,((-2,4),All {getAll = False})
+                        ,((-13,14),All {getAll = True})
+                        ,((-16,10),All {getAll = False})
+                        ,((-15,8),All {getAll = False})
+                        ,((-15,-10),All {getAll = True})
+                        ,((-17,-4),All {getAll = False})]
+    let ts = [a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s] :: [RTree Int All]
+
+    let testMconcat ts = do let t = mconcat ts
+                                st = size t
+                                sts = size <$> ts
+
+                            st `shouldSatisfy` (<= sum sts)
+                            st `shouldSatisfy` (>= minimum sts)
+                            keys t `shouldContainExactly` L.nubOrd (ts >>= keys)
+
+    specify "we can calculate the concatenation" $ QC.within 60_000 (testMconcat ts)
+    specify "this holds for any pair of trees" $ forAll (vectorOf 2 (elements ts)) testMconcat
 
 dim3Sets = describe "Dim3Set"  $ do
   monoid (eq :: Comparator Dim3Set)

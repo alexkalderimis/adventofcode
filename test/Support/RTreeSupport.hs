@@ -1,15 +1,17 @@
+{-# LANGUAGE FlexibleContexts #-}
+
 module Support.RTreeSupport where
 
 import qualified Data.Array as A
 import           Data.Array ((//))
-import qualified Data.List                as L
+import qualified Data.List.Extra          as L
 import qualified Data.Tree                as T
 import qualified Data.Foldable            as F
 import           Data.Maybe
 import           Control.Arrow            (first, second)
 import qualified Data.List.NonEmpty as NE
 
-import           Elves (applyN)
+import           Elves (applyN, Expectation, expectationFailure)
 import           Elves.RTree              hiding (null)
 import qualified Elves.RTree              as RT
 import qualified Elves.StrictGrid as G
@@ -37,9 +39,13 @@ type Dim3Set = RTree Dim3 ()
 type RangeTree a = RTree Int a
 
 newtype Unique a = Unique { getUnique :: [a] } deriving (Show)
+newtype UniqueKeys k v = UniqueKeys { getUniqueKeys :: [(k, v)] } deriving (Show)
 
-instance (Arbitrary a, Eq a) => Arbitrary (Unique a) where
-  arbitrary = Unique . L.nub <$> arbitrary
+instance (Arbitrary a, Ord a) => Arbitrary (Unique a) where
+  arbitrary = Unique . L.nubOrd <$> arbitrary
+
+instance (Arbitrary k, Arbitrary a, Ord k) => Arbitrary (UniqueKeys k a) where
+  arbitrary = UniqueKeys . fmap head . L.groupOn fst . L.sortOn fst <$> arbitrary
 
 data NNInput a = NNInput a a [a] deriving Show
 
@@ -50,6 +56,17 @@ instance (Arbitrary a, Ord a) => Arbitrary (NNInput a) where
     y <- arbitrary `suchThat` (not . (`elem` (x:xs)))
     return (NNInput x y xs)
   shrink (NNInput a b cs) = NNInput a b <$> shrink cs
+
+shouldBeMemberOf :: (Show i, Show a, Queryable i) => Bounds i -> RTree i a -> Expectation
+k `shouldBeMemberOf` t = if RT.member k t
+                            then pure ()
+                            else expectationFailure (show k <> " is not a member of " <> show t)
+
+beMemberOf :: (Show i, Show a, Queryable i) => Bounds i -> RTree i a -> Expectation
+beMemberOf = shouldBeMemberOf
+
+treeProperty :: Testable prop => (RTree Dim3 Word -> prop) -> Property
+treeProperty = property
 
 query1 :: Dim3 -> Dim3Set -> [(Dim3,())]
 query1 i = fmap (first fst) . take 1 . query Within (i,i)
