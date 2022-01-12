@@ -65,13 +65,13 @@ checksum = S.size . tape
 
 runUntilCheckSum :: StateMachine -> (PhaseId, TuringState)
 runUntilCheckSum m = runState (runTuringM go) newState
-  where go = applyNM (fromIntegral $ checkSumAfter $ machineHdr m)
+  where go = applyNM (fromIntegral . checkSumAfter $ machineHdr m)
                      (run $ machinePhases m)
                      (initPhase $ machineHdr m)
 
-validateMachine :: (Monad m) => StateMachine -> m StateMachine
+validateMachine :: (Monad m, MonadFail m) => StateMachine -> m StateMachine
 validateMachine m@StateMachine{..}
-  | not (HS.null missingPhases) = fail $ "invalid machine, missing: " ++ show missingPhases
+  | not (HS.null missingPhases) = fail $ "invalid machine, missing: " <> show missingPhases
   | otherwise = pure m
   where
     phases = initPhase machineHdr : fmap actionCont (M.elems machinePhases >>= actions)
