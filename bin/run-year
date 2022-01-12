@@ -1,0 +1,9 @@
+#!/bin/bash
+
+for day in $YEAR/; do
+  echo $day
+
+  stack run $YEAR $(basename $day) test
+  stack run $YEAR $(basename $day) pt1
+  stack run $YEAR $(basename $day) pt2
+done

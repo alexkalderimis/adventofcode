@@ -24,16 +24,8 @@ test:puzzles:
   stage: test
   needs: ["test:elves"]
   script:
-    - echo $YEAR/$DAY
-    - echo TESTS
-    - stack run $YEAR $DAY test
-    - echo PART-1
-    - stack run $YEAR $DAY pt1
-    - echo PART-2
-    - stack run $YEAR $DAY pt2
+    - echo $YEAR
+    - bin/run-year
   parallel:
     matrix:
-      - YEAR: 2021
-        DAY: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
-      - YEAR: [2017,2018]
-        DAY: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25]
+      - YEAR: [2017, 2018, 2021]
