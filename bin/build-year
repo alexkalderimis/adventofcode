@@ -1,0 +1,15 @@
+#!/bin/bash
+
+set -e
+
+targets=()
+
+for date in ./"$YEAR"/* ; do
+  day=$(basename $date)
+
+  if test -f $date/Main.hs; then
+    targets+=("build/puzzle_${YEAR}_${day}")
+  fi
+done
+
+make ${targets[*]}

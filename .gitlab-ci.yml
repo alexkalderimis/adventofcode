@@ -10,6 +10,7 @@ cache:
     - .stack-root/
     - dist/
     - dist-newstyle/
+    - build/
 
 before_script:
   - stack config set system-ghc --global true
@@ -25,12 +26,67 @@ test:elves:
   script:
     - stack test
 
-test:puzzles:
+.puzzles:
   stage: test
-  needs: ["test:elves"]
+  needs: ["test:elves", "build:puzzles"]
   script:
-    - echo $YEAR
-    - bin/run-year
+    - stack run $YEAR $DAY test
+    - stack run $YEAR $DAY pt1
+    - stack run $YEAR $DAY pt2
+
+test:puzzles:2021:
+  extends: .puzzles
   parallel:
     matrix:
-      - YEAR: [2017, 2018, 2021]
+      - YEAR: 2021
+        DAY:
+          - 1
+          - 2
+          - 3
+          - 4
+          - 5
+          - 6
+          - 7
+          - 8
+          - 9
+          - 10
+          - 11
+          - 12
+          - 13
+          - 14
+          - 15
+          - 16
+          - 17
+          - 18
+
+test:puzzles:2017:
+  extends: .puzzles
+  parallel:
+    matrix:
+      - YEAR: 2021
+        DAY:
+          - 1
+          - 2
+          - 3
+          - 4
+          - 5
+          - 6
+          - 7
+          - 8
+          - 9
+          - 10
+          - 11
+          - 12
+          - 13
+          - 14
+          - 15
+          - 16
+          - 17
+          - 18
+          - 19
+          - 20
+          - 21
+          - 22
+          - 23
+          - 24
+          - 25
