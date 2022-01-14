@@ -14,20 +14,20 @@ import           System.Exit
 import           Text.Parser.Char
 import           Text.Parser.Combinators
 
+import Elves
+import Elves.Advent
+
 data Direction = N | S | E | W deriving (Show)
 type Building = Tree (Maybe Direction)
 
 type Location = (Int, Int)
 
 main :: IO ()
-main = do
-  eb <- parseOnly buildingP <$> Text.getContents
-  case eb of
-    Left err -> die err
-    Right b  -> do putStrLn "Parsed"
-                   let m = explore b
-                   print (maximum . M.elems $ m)
-                   print $ length (filter (>= 1000) (M.elems m))
+main = day 20 buildingP pt1 pt2 spec
+  where
+    pt1 = print . maxDepth 
+    pt2 b = do let m = explore b
+               print $ length (filter (>= 1000) (M.elems m))
 
 move :: Direction -> Location -> Location
 move N = translate (-1,0)
@@ -77,7 +77,7 @@ buildingP = char '^' *> building Nothing <* char '$'
     sharedTail bs = do mds <- optional door
                        case mds of
                          Nothing -> return (concat bs)
-                         Just ds -> return ((graft ds <$> concat bs) ++ ds)
+                         Just ds -> return ((graft ds <$> concat bs) <> ds)
     -- when groups are fully specified, then they all restart from the given position
     commonTail bs = do mds <- optional door
                        case mds of
@@ -90,18 +90,16 @@ buildingP = char '^' *> building Nothing <* char '$'
                    sf -> b { subForest = graft ds <$> sf }
 
 
-examples :: [Text]
+examples :: [(Int, Text)]
 examples =
-  ["^WNE$"
-  ,"^N(E|W)N$"
-  ,"^ENWWW(NEEE|SSE(EE|N))$"
-  ,"^ENNWSWW(NEWS|)SSSEEN(WNSE|)EE(SWEN|)NNN$"
-  ,"^ESSWWN(E|NNENN(EESS(WNSE|)SSS|WWWSSSSE(SW|NNNE)))$"
-  ,"^WSSEESWWWNW(S|NENNEEEENN(ESSSSW(NWSW|SSEN)|WSWWN(E|WWS(E|SS))))$"
+  [(3, "^WNE$")
+  ,(3, "^N(E|W)N$")
+  ,(10, "^ENWWW(NEEE|SSE(EE|N))$")
+  ,(18, "^ENNWSWW(NEWS|)SSSEEN(WNSE|)EE(SWEN|)NNN$")
+  ,(23, "^ESSWWN(E|NNENN(EESS(WNSE|)SSS|WWWSSSSE(SW|NNNE)))$")
+  ,(31, "^WSSEESWWWNW(S|NENNEEEENN(ESSSSW(NWSW|SSEN)|WSWWN(E|WWS(E|SS))))$")
   ]
 
-runExamples = do
-  flip mapM_ examples $ \ex -> do
-    Text.putStr ex
-    Text.putStr " "
-    print (maxDepth <$> parseOnly buildingP ex)
+spec = describe "maxDepth" . forM_ examples $ \(n, ex) -> do
+  specify (Text.unpack ex) $ do
+    (maxDepth <$> parseOnly buildingP ex) `shouldBe` Right n

@@ -1,4 +1,3 @@
-{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE FlexibleContexts #-}
 
 -- This exercise is all about efficiency, as being able to return answers
@@ -13,7 +12,6 @@
 
 import System.Environment (withArgs, getArgs)
 
-import Test.Hspec
 import Control.Monad
 import Text.Printf
 import Data.Foldable
@@ -24,6 +22,8 @@ import Data.Array.ST
 import Control.Monad.ST
 import qualified Data.Array as A
 
+import Elves.Advent hiding (focus)
+
 type Marble = Int
 
 -- A circle has at least one element (the focus), and 
@@ -31,26 +31,17 @@ type Marble = Int
 data Circle = Circle
   { lStack :: ![Marble]
   , rStack :: ![Marble]
-  , focus   :: !Marble
+  , focus  :: !Marble
   } deriving (Show, Eq)
 
 marbles :: Circle -> [Marble]
-marbles c = reverse (lStack c) ++ focus c : rStack c
+marbles c = reverse (lStack c) <> (focus c : rStack c)
 
 main :: IO ()
-main = do
-  args <- getArgs
-  case args of
-    ["test"] -> withArgs [] (hspec spec)
-    ["pt1"]  -> time $ print (highScore 465 71940)
-    ["pt2"]  -> time $ print (highScore 465 (71940 * 100))
-    _        -> putStrLn "missing argument: test, pt1, pt2"
+main = staticDay 9 pt1 pt2 spec
   where
-    time act = do
-      start <- Clock.getCurrentTime
-      act
-      end <- Clock.getCurrentTime
-      print (Clock.diffUTCTime end start)
+    pt1 = print (highScore 465 71940)
+    pt2 = print (highScore 465 (71940 * 100))
 
 currentMarble :: Circle -> Int
 currentMarble = focus
@@ -65,7 +56,7 @@ place m c
 showCircle :: Circle -> String
 showCircle (Circle ls rs foc) =
   unwords $ concat [fmap show (reverse ls)
-                   ,["(" ++ show foc ++ ")"]
+                   ,["(" <> show foc <> ")"]
                    ,fmap show rs
                    ]
 
@@ -117,9 +108,7 @@ highScore numPlayers lastMarble = do
   let 
       ms          = [1 .. lastMarble]
       initState   = ((0,0), initCircle)
-      finalScores = buildScores
-                  $ fmap fst
-                  $ scanl step initState ms
+      finalScores = buildScores (fst <$> scanl step initState ms)
    in maximum $ A.elems finalScores
   where
     buildScores scores = runST $ do

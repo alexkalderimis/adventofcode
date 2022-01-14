@@ -33,14 +33,14 @@ coordP = (,,,) <$> (int <* ",") <*> (int <* ",") <*> (int <* ",") <*> int
 inputP :: Parser [Point]
 inputP = coordP `sepEndBy1` newline
 
-pointsWithin :: (Ix i, Coord i) => Int -> RT.RTree i a -> i -> [i]
+pointsWithin :: Int -> RT.RTree Point () -> Point -> [Point]
 pointsWithin n tree p = filter ((<= n) . manhattan p)
-                            . fmap (RT.getPoint . fst)
-                            $ RT.query Overlapping (RT.expandQuery n (p,p)) tree
+                      . fmap (fst . fst)
+                      $ RT.query Within (RT.expandQuery n (p,p)) tree
 
 numberOfConstellations :: [Point] -> Int
 numberOfConstellations ps =
-  let t = RT.fromList (zip (RT.point <$> ps) (repeat ()))
+  let t = RT.fromPoints (zip ps (repeat ()))
    in numberOfCliques $ searchGraph (pointsWithin 3 t) ps
 
 test = do
@@ -56,10 +56,10 @@ test = do
 
   describe "pointsWithin" $ do
     let getTree :: [Point] -> RTree Point ()
-        getTree ps = RT.fromList (zip (RT.point <$> ps) (repeat ()))
+        getTree ps = RT.fromPoints (zip ps (repeat ()))
         naive :: [Point] -> Point -> [Point]
         naive ps p = filter ((<= 3) . manhattan p) ps
-    it "is the same as a naive filter" $ property $ \(NonEmpty points) -> do
+    it "is the same as a naive filter" . property $ \(NonEmpty points) -> do
       let t = getTree points
           p = head points
       S.fromList (pointsWithin 3 t p) == S.fromList (naive points p)
@@ -73,7 +73,7 @@ test = do
     describe "example_1" $ do
       it "has 2 constellations" $
         numberOfConstellations example_1 `shouldBe` 2
-      it "could have only one, if we add a connecting point" $
+      it "would have only one, if we added a connecting point" $
         numberOfConstellations ((6,0,0,0) : example_1) `shouldBe` 1
     describe "example_2" $
       it "has 4 constellations" $
@@ -87,7 +87,7 @@ test = do
 
 textify ps = Text.unlines (to_string <$> ps)
   where
-    to_string p = Text.intercalate "," (Text.pack . show . (p ^.) . runLens <$> dimensions)
+    to_string (x,y,z,w) = Text.intercalate "," (Text.pack . show <$> [x,y,z,w])
 
 example_1 :: [Point]
 example_1 =

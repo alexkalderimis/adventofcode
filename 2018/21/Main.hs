@@ -3,9 +3,14 @@ import Data.Bits
 import Text.Printf
 import qualified Data.IntSet as S
 
+import Elves.Advent
+
 main :: IO ()
-main = uncurry (printf "Last value in sequence: %d (seq. size: %d)\n")
-               (lastBeforeLoop valuesOfE)
+main = staticDay 21 pt1 pt2 (pure ())
+  where
+    pt1 = print (head valuesOfE)
+    pt2 = uncurry (printf "Last value in sequence: %d (seq. size: %d)\n")
+                  (lastBeforeLoop valuesOfE)
 
 -- pt2 requires finding the last uniq value in the sequence.
 --
@@ -19,8 +24,11 @@ lastBeforeLoop (x:xs) = go x (S.singleton x) xs
       | S.member x seen = (previous, S.size seen)
       | otherwise       = go x (S.insert x seen) xs
 
--- the 'e' register in the programme represents a sequence,
--- produced using the following steps (decompiled manually
+-- the programme halts when a is a value of 'e' (see line 24 of
+-- pseudo code).
+--
+-- the halting values for 'e' register in the programme represent
+-- a sequence, produced using the following steps (decompiled manually
 -- from reading the assembly).
 --
 -- should go 9079325, 1293036, 637585, 4545250, ...
@@ -38,4 +46,3 @@ valuesOfE = unfoldr go 0
     loop'' b c e f = if b > f
                      then loop' e c
                      else loop'' ((c + 2) * 256) (c + 1) e f
-        

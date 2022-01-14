@@ -36,6 +36,26 @@ build:puzzles:
           - 2018
           - 2017
 
+test:lint:
+  stage: test
+  before_script:
+    - curl -sSL https://raw.github.com/ndmitchell/hlint/master/misc/run.sh | sh -s .
+  script:
+    - hlint $DIR
+  parallel:
+    matrix:
+      - DIR:
+         - src
+         - test
+         - app
+         - 2021
+         - 2020
+         - 2019
+         - 2018
+         - 2017
+         - 2016
+         - 2015
+
 test:elves:
   stage: test
   needs: ["build:elves"]

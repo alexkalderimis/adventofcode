@@ -6,12 +6,13 @@ import System.Exit
 import System.IO
 import System.Process.Typed
 import Data.Maybe
+import Data.Char
 import qualified Data.List as L
 import qualified Data.ByteString.Lazy as BS
 import Options.Applicative hiding (action)
 
 type Cmd = ProcessConfig () () ()
-data Action = Test | PT1 | PT2 deriving (Show, Eq)
+data Action = Test | PT1 | PT2 | Custom String deriving (Show, Eq)
 
 data Options = Options
   { year :: String
@@ -46,6 +47,7 @@ parseAction = eitherReader $ \s -> case s of
   "pt1" -> pure PT1
   "pt2" -> pure PT2
   "test" -> pure Test
+  _ | all ((&&) <$> isLower <*> isLetter) s -> pure (Custom s)
   _ -> Left ("Cannot intepret '" <> s <> "' as an action. Expected pt1, pt2, or test")
 
 parseYear :: ReadM String
@@ -75,7 +77,7 @@ run opts = do
   case exitCode of
     ExitSuccess -> do
       f <- inputProvider opts
-      runProcess (f $ proc executable $ commandLine opts) >>= exitWith
+      runProcess (f . proc executable $ commandLine opts) >>= exitWith
     _ -> BS.hPut stderr err >> exitWith exitCode 
 
 -- This value needs to be kept in sync with the build target in the Makefile and the bin/source_file script.
@@ -99,5 +101,6 @@ commandLine opts = case action opts of
   Test -> ["test"]
   PT1 -> ["pt1"]
   PT2 -> ["pt2"]
+  Custom s -> [s]
 
 -- vim: syntax=haskell

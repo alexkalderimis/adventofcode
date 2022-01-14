@@ -9,6 +9,7 @@ import           System.Exit
 import           Text.Parser.Char
 import           Text.Printf
 
+import Elves.Advent
 import qualified Elves.AStar             as AStar
 
 data Terrain  = Rocky | Wet | Narrow deriving (Show, Eq, Enum)
@@ -18,13 +19,10 @@ type CaveMap  = A.Array Coord Terrain
 type Depth    = Int
 
 main :: IO ()
-main = do
-  ei <- parseOnly inputP <$> Text.getContents
-  case ei of
-    Left err -> die err
-    Right (d,target) -> do
-      printf "Region risk: %d\n" (riskLevelRegion (caveMap d target target))
-      printf "Minimum rescue time: %d minutes\n" (rescueTime $ rescue d target)
+main = day 22 inputP pt1 pt2 (pure ())
+  where
+    pt1 (d, target) = printf "Region risk: %d\n" (riskLevelRegion (caveMap d target target))
+    pt2 (d, target) = printf "Minimum rescue time: %d minutes\n" (rescueTime $ rescue d target)
 
 riskLevel :: Terrain -> Int
 riskLevel = fromEnum
@@ -32,9 +30,7 @@ riskLevel = fromEnum
 rescueTime :: Maybe [(Equipped, Coord)] -> Int
 rescueTime = maybe 0 totalPathCost
   where
-   totalPathCost steps = sum
-                       $ fmap (uncurry pathCost)
-                       $ zip steps (tail steps)
+   totalPathCost steps = sum (uncurry pathCost <$> zip steps (tail steps))
 
 rescue :: Depth -> Coord -> Maybe [(Equipped, Coord)]
 rescue d target = (start :) <$> AStar.aStarOrd g distance estimate (== end) start
@@ -101,7 +97,7 @@ neighbours :: CaveMap -> Coord -> (Equipped, Coord) -> S.Set (Equipped, Coord)
 neighbours cave target (e,c)
   = S.fromList [(e',c') | let moved      = (,) e . ($ c) <$> [up,down,left,right]
                         , let reequipped = flip (,) c <$> [minBound .. maxBound]
-                        , (e',c') <- moved ++ reequipped
+                        , (e',c') <- moved <> reequipped
                         , (e',c') /= (e,c) -- different to current state
                         , A.inRange (A.bounds cave) c' -- within the cave
                         , canBeUsed e' (cave A.! c')

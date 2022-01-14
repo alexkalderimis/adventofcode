@@ -7,11 +7,13 @@ import Data.List (mapAccumL, maximumBy)
 import Data.Ord
 import System.Environment (withArgs, getArgs)
 import System.Exit
-import Test.Hspec
 import Test.QuickCheck (property)
 import Text.Printf
 import Text.Read (readMaybe)
 import qualified Data.Array.Unboxed as A
+import           Data.Attoparsec.Text (decimal)
+
+import Elves.Advent
 
 newtype SerialNo = SerialNo { unSO :: Int } deriving (Show)
 type FuelLevel = Int
@@ -19,19 +21,13 @@ type Coord = (Int, Int)
 type FuelCells = A.UArray Coord FuelLevel
 
 main :: IO ()
-main = do
-  args <- getArgs
-  case args of
-    ["test"] -> withArgs [] (hspec spec)
-    ["pt1", input] -> getCells input >>= print . selectMaxSquare 3
-    ["pt2", input] -> getCells input >>= printPt2 . partTwo
-    _ -> putStrLn $ "bad arguments - expected test,pt1,pt2"
+main = day 11 parser pt1 pt2 spec
   where
+    parser = initFuelCell . SerialNo <$> decimal
+    pt1 = print . selectMaxSquare 3
+    pt2 = printPt2 . partTwo
     printPt2 (size, ((x,y), total)) =
       printf "Total %d: %d,%d,%d\n" total x y size
-    getCells s = case readMaybe s of
-       Nothing -> die $ "Bad input. Not a number: " ++ s
-       Just sn -> return $ initFuelCell (SerialNo sn)
 
 fuelCellBounds :: (Coord, Coord)
 fuelCellBounds = ((1,1), (300,300))
@@ -44,34 +40,34 @@ type Total = Int
 
 -- doing the naive thing (max [selectMaxSquare i cells | i <- [1 .. 300]]) is
 -- extremely expensive, taking over 10 minutes to complete. This solution
--- completes in about 11sec.
+-- completes in about 11sec, using dynamic programming.
 --
 -- The key optimisation is recognising that the sums of smaller stages can be
 -- reused for the larger sizes. So as we proceed, we memoize the previous
 -- steps. E.G:
 --
--- ***#
--- ***#
--- ***#
--- ####
+-- ###.
+-- ###.
+-- ###.
+-- ....
 --
--- If we already know the sum of the *'s at origin (x,y) (size = 3), then the
--- sum of the square at the same origin but at size 4 is the sum of the *'s and
--- the #'s. If we record the (pos -> sum) mapping for each stage, then we can
+-- If we already know the sum of the #'s at origin (x,y) (size = 3), then the
+-- sum of the square at the same origin but at size 4 is the sum of the #'s and
+-- the .'s. If we record the (pos -> sum) mapping for each stage, then we can
 -- just look up the previous value and add the missing edges to it. So in this
--- case we save 9 lookups, or 56%. At larger sizes this really pays of. At size
+-- case we save 9 lookups, or 56%. At larger sizes this really pays off. At size
 -- 30, we would save 93% of the lookups, and over 99% by the 200th state. Just
 -- as we avoid the calculation with a lookup table, we avoid almost all the
 -- array reads as we progress by forming squares onion-wise from their smaller
 -- forebears. At each stage we only have one memoised array around (that from
--- the previous state).
+-- the previous state), in addition to the main fuel-cells array.
 partTwo :: FuelCells -> (Size, (Coord, Total))
 partTwo cells = maximumBy (comparing (snd.snd))
               . snd
               $ mapAccumL go cells [1 .. 300]
   where
     go a 1 = (a, ret 1 cells) -- no translation/derivation required
-    go a n = let bds = fmap (translate (-1,-1)) $ A.bounds a
+    go a n = let bds = translate (-1,-1) <$> A.bounds a
                  a'  = A.array bds $ fmap (\ix -> (ix, oneBigger n a ix)) (A.range bds)
               in (a', ret n a')
 
@@ -91,7 +87,7 @@ selectMaxSquare :: Int -> FuelCells -> (Coord, Int)
 selectMaxSquare 1 cells = maxAssoc cells
 selectMaxSquare size cells = maximumBy (comparing snd) $ do
   let offset = size - 1
-  pos <- A.range $ fmap (translate (negate offset, negate offset))
+  pos <- A.range . fmap (translate (negate offset, negate offset))
                  $ fuelCellBounds
   let bds = (pos, translate (offset,offset) pos)
   return (pos, gridTotal cells bds)
@@ -120,7 +116,7 @@ spec :: Spec
 spec = do
   describe "currentCellLevel" $ do
     let examples = [(SerialNo 8,  (3,5), 4)
-                   ,(SerialNo 57, (122, 79), (-5))
+                   ,(SerialNo 57, (122, 79), -5)
                    ,(SerialNo 39, (217, 196), 0)
                    ,(SerialNo 71, (101, 153), 4)
                    ]

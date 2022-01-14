@@ -19,6 +19,9 @@ import           System.Exit
 import           Text.Parser.Char
 import           Text.Parser.Combinators (between, sepBy1)
 
+import Elves
+import Elves.Advent
+
 data ByteCodeInstr a = ByteCodeInstr
   { opCode :: a
   , args   :: (Int, Int, Int)
@@ -34,6 +37,15 @@ data Input = Input
   { samples   :: [Sample]
   , programme :: [ByteCodeInstr Int]
   } deriving (Show, Eq)
+
+main :: IO ()
+main = day 16 inputP pt1 pt2 (it "has tests" pending)
+  where
+    pt1 = print . length . filter ((>= 3) . length . couldBe) . samples
+    pt2 (Input samples prog) =  do
+      let mapping = solve samples
+      let prog' = fmap (mapping M.!) <$> prog
+      putStrLn . maybe "NUL" (show . view _1) $ runProgramme prog'
 
 inputP :: Parser Input
 inputP = Input <$> (sampleP `sepBy1` (newline >> newline))
@@ -170,25 +182,13 @@ cantBe (Sample m0 m1 bc) = filter f [minBound .. maxBound]
   where
     f instr = eval instr m0 (args bc) /= Just m1
 
-main :: IO ()
-main = do
-  inp <- parseOnly inputP <$> Text.getContents
-  case inp of
-    Left err -> die err
-    Right (Input samples prog) -> do
-      let matchMany = filter ((>= 3) . length . couldBe) samples
-      print (length matchMany)
-      let mapping = solve samples
-      let prog' = fmap (mapping M.!) <$> prog
-      print (runProgramme prog')
-
 solve :: [Sample] -> M.Map Int Instruction
 solve ss =
   let cannot = M.fromListWith (<>) [(opCode (byteCodeInstr s), S.fromList (cantBe s)) | s <- ss]
       possibles = M.map excluded cannot
    in go mempty possibles
   where
-    excluded set = S.fromList $ filter (flip S.notMember set) [minBound .. maxBound]
+    excluded set = S.fromList $ filter (`S.notMember` set) [minBound .. maxBound]
     -- iteratively solve the puzzle by removing instructions we have sufficient
     -- evidence for.
     go :: M.Map Int Instruction -> M.Map Int (S.Set Instruction) -> M.Map Int Instruction
@@ -196,7 +196,7 @@ solve ss =
     go good maybes =
         let (found, remaining) = M.partition ((== 1) . S.size) maybes
          in if M.null found
-              then error $ "Cannot solve " ++ show maybes
+              then error $ "Cannot solve " <> show maybes
               else let good' = good <> M.map (head . S.toList) found
                        maybes' = foldl' removeFound remaining $ M.elems good'
                     in go good' maybes'

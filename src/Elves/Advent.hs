@@ -1,5 +1,5 @@
 module Elves.Advent (
-  Part, day, staticDay, namedTime, time,
+  Part, day, staticDay, generalDay, namedTime, time,
   Parser, parseOnly,
   module X
   ) where
@@ -11,6 +11,7 @@ import qualified Data.Text.IO         as Text
 import qualified Data.Time.Clock      as Clock
 import           System.Environment
 import           System.Exit
+import qualified Data.List.Extra as L
 import           Text.Parser.Char     (newline)
 
 import           Test.Hspec as X
@@ -38,8 +39,20 @@ day :: Int      -- ^ The day (1..25)
     -> Part a   -- ^ An implementation for part-two (available once part-one is solved)
     -> Spec     -- ^ A test suite
     -> IO ()    -- ^ The main action
-day n parser pt1 pt2 spec = do
-  staticDay n (getInput >>= pt1) (getInput >>= pt2) spec
+day n parser pt1 pt2 spec = generalDay n parser spec [("pt1", pt1), ("pt2", pt2)]
+
+generalDay :: Int
+    -> Parser a -- ^ A Parser for the input, received on stdin
+    -> Spec     -- ^ A test suite
+    -> [(String, Part a)] -- named parts
+    -> IO ()    -- ^ The main action
+generalDay n parser spec parts = do
+  args <- getArgs
+  case args of
+    ("test":test_args) -> withArgs test_args $ hspec (describe ("Day " <> show n) spec)
+    (name:rst) -> case lookup name parts of
+      Just part -> withArgs rst (namedTime name (getInput >>= part))
+      _         -> die ("bad arguments. Expected one of " <> L.intercalate ", " (fst <$> parts) <> " or test, got: " <> unwords args)
   where
     getInput = Text.getContents >>= either (die . ("Could not parse input! " ++)) pure
                                     . parseOnly (parser <* (many newline >> endOfInput))

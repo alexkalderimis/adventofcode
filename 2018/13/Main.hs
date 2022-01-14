@@ -1,29 +1,32 @@
-import           Control.Monad
-import           Control.Monad.ST
-import           Data.Array.ST      as STA
-import qualified Data.Array.Unboxed as A
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TupleSections #-}
+
+import           Data.Functor
+import qualified Data.Array as A
 import           Data.Foldable
-import           Data.Int
-import qualified Data.Map.Strict    as M
+import qualified Data.Text as T
+import           Data.Text (Text)
 import           Data.Maybe
 import qualified Data.Set           as S
+import qualified Data.Map.Strict    as M
 import           Data.Traversable   (for)
-import           System.Environment
-import           System.Exit
-import           Test.Hspec
-import           Test.QuickCheck    (Arbitrary, arbitrary, property)
 import           Text.Printf
+import qualified Data.Attoparsec.Text as Atto
+import           Text.Parser.Char (newline, text)
+
+import Elves
+import Elves.Advent
+import Elves.Coord.Strict
+import qualified Elves.StrictGrid as G
+import Elves.Coord (translate)
 
 data Turn = L | Straight | R deriving (Show, Eq, Enum, Bounded)
 
 data Direction = N | S | E | W
   deriving (Show, Eq)
 
-data TrackSegment = NS | EW | Intersection | FwdSlash | BackSlash
-                  | NoTrack
+data TrackSegment = NS | EW | Intersection | FwdSlash | BackSlash | NoTrack
   deriving (Show, Eq, Enum)
-
-type Location = (Int, Int)
 
 data Policy = AllowCollisions | RemoveCarts deriving (Show, Eq)
 
@@ -32,138 +35,124 @@ data Cart = Cart
   , cartLastTurn  :: !Turn
   } deriving (Show, Eq)
 
--- store network map as unboxed array of bytes. Wrap
--- access to track segments via Enum, going through Int
-type NetworkMap = A.UArray Location Int8
+type NetworkMap = A.Array Coordinate TrackSegment
 
-type Carts = M.Map Location Cart
+type Carts = [(Coordinate, Cart)]
 
 main :: IO ()
-main = do
-  (nw, carts) <- parseInput <$> getContents
-  args <- getArgs
-  policy <- case args of [] -> pure AllowCollisions
-                         ["pt2"] -> pure RemoveCarts
-                         _ -> die $ "Unexpected arguments " ++ show args
+main = day 13 parseInput pt1 pt2 spec
+  where
+    pt1 = run AllowCollisions
+    pt2 = run RemoveCarts
+    run :: Policy -> (NetworkMap, Carts) -> IO ()
+    run policy (nw, carts) = do
+        printf "%d carts\n" (length carts)
+        let go = \mcs _ -> mcs >>= tick policy nw
+            (Coord y x) = head [loc | Left loc <- scanl go (pure carts) (repeat ())]
+            msg = case policy of AllowCollisions -> "Collision"
+                                 RemoveCarts     -> "Last Cart"
+        printf "%s: %d,%d\n" (msg :: String) x y
 
-  printf "%d carts\n" (M.size carts)
-  let go = \mcs _ -> mcs >>= tick policy nw
-      (y,x) = head [loc | Left loc <- scanl go (pure carts) (repeat ())]
-      msg = case policy of AllowCollisions -> "Collision"
-                           RemoveCarts     -> "Last Cart"
-  printf "%s: %d,%d\n" (msg :: String) x y
-
-translate :: Location -> Location -> Location
-translate (dy,dx) (y,x) = (y + dy, x + dx)
-
-runN :: Int -> Policy -> NetworkMap -> Carts -> Maybe Location
+runN :: Int -> Policy -> NetworkMap -> Carts -> Maybe Coordinate
 runN 0 _ _ _ = Nothing
 runN n p nw cs = case tick p nw cs of
                    Left loc -> pure loc
                    Right cs' -> runN (pred n) p nw cs'
 
-parseInput :: String -> (NetworkMap, Carts)
-parseInput str =
-  let strs = lines str
-      cells = catMaybes [cellP (y,x) c | (y, row) <- zip [0 ..] strs
-                                     , (x, c) <- zip [0 ..] row
-                        ]
-      nmap = M.fromList [(loc, seg) | (loc, seg, _) <- cells]
-      cmap = M.fromList [(loc, crt) | (loc, _, Just crt) <- cells]
-      bounds = ((0,0), (length strs - 1, maximum (fmap length strs) - 1))
-      network = A.array bounds [(loc, encodeSeg (M.lookup loc nmap)) | loc <- A.range bounds]
-   in (network, cmap)
-  where
-    encodeSeg mseg = toEnum . fromEnum $ fromMaybe NoTrack mseg
+parseInput :: Parser (NetworkMap, Carts)
+parseInput = do
+  cells <- G.gridP cellP
+  let network = fmap fst cells
+      carts = mapMaybe (\(loc, mc) -> (loc,) <$> mc) . A.assocs $ fmap snd cells
+  pure (network, carts)
 
-cellP :: Location -> Char -> Maybe (Location, TrackSegment, Maybe Cart)
-cellP loc c = case c of
-  '/'  -> Just (loc, FwdSlash, Nothing)
-  '\\' -> Just (loc, BackSlash, Nothing)
-  '-'  -> Just (loc, EW, Nothing)
-  '|'  -> Just (loc, NS, Nothing)
-  '+'  -> Just (loc, Intersection, Nothing)
-  '>'  -> Just (loc, EW, mkCart E)
-  '<'  -> Just (loc, EW, mkCart W)
-  '^'  -> Just (loc, NS, mkCart N)
-  'v'  -> Just (loc, NS, mkCart S)
-  _    -> Nothing
+cellP :: Parser (TrackSegment, Maybe Cart)
+cellP =   text "/"  $> (FwdSlash, Nothing)
+      <|> text "\\" $> (BackSlash, Nothing)
+      <|> text "-"  $> (EW, Nothing)
+      <|> text "|"  $> (NS, Nothing)
+      <|> text "+"  $> (Intersection, Nothing)
+      <|> text ">"  $> (EW, mkCart E)
+      <|> text "<"  $> (EW, mkCart W)
+      <|> text "^"  $> (NS, mkCart N)
+      <|> text "v"  $> (NS, mkCart S)
+      <|> text " "  $> (NoTrack, Nothing)
   where
       mkCart d = pure $ Cart d maxBound
 
 -- requires that the location be in bounds. This is a good
 -- thing, since attempting to get a segment off the map suggests
 -- we have gone off-track, in the literal sense.
-trackSegment :: NetworkMap -> Location -> TrackSegment
-trackSegment map loc = toEnum . fromEnum $ map A.! loc
+trackSegment :: NetworkMap -> Coordinate -> TrackSegment
+trackSegment = (A.!)
 
--- shows state at each tick. Usefull in the repl
+-- shows state at each tick. Useful in the repl
 runSim :: Policy -> Int -> NetworkMap -> Carts -> IO ()
 runSim _ 0 _ _ = putStrLn "Limit reached!"
 runSim p limit nmap carts = do
   putStrLn (showState nmap carts)
   case tick p nmap carts of
-    Left loc -> putStrLn $ "Crash! " ++ show loc
+    Left loc -> printf "Crash! (%d, %d)" (row loc) (col loc)
     Right cs -> putStrLn (replicate 20 '-')
                 >> runSim p (pred limit) nmap cs
 
 -- on each tick move the carts about.
--- If there a collision, then we 'error' with that location.
-tick :: Policy -> NetworkMap -> Carts -> Either Location Carts
-tick policy nmap carts = case M.toAscList carts of
+-- If there is a collision, then we 'error' with that location.
+tick :: Policy -> NetworkMap -> Carts -> Either Coordinate Carts
+tick policy nmap carts = case carts of
   []        -> error "No carts"
   [(loc,_)] -> Left loc
-  positions -> fmap fst $ foldM microtick (carts,mempty) positions
+  _         -> M.toList . fst <$> foldM microtick (M.fromList carts, S.empty) carts
   where
     -- semantically richer helpers
-    isRemoved s loc       = S.member loc (snd s)
-    occupant s loc        = M.lookup loc (fst s)
+    skip s loc            = S.member loc (snd s)
+    occupied s loc        = M.member loc (fst s)
     moveTo s old new c    = (M.delete old $ M.insert new c (fst s), snd s)
-    removeColliding s a b = (foldr M.delete (fst s) [a, b], S.insert b (snd s))
+    removeColliding (m, s) a b = (foldr M.delete m [a, b], S.insert b s)
     -- we need to know both the positions of other carts (so the carts
     -- map) as well as carts that have been removed on this tick, so that
     -- they can be skipped over when they turn up.
-    microtick s (loc, _) | isRemoved s loc = pure s
+    microtick s (loc, _) | skip s loc = pure s
     microtick s (loc, c) = do
       let c'   = turnCart (trackSegment nmap loc) c
           loc' = continueAhead c' loc
-      case (occupant s loc', policy) of
-        (Nothing, _)         -> return (moveTo s loc loc' c')
-        (_, RemoveCarts)     -> return (removeColliding s loc loc')
+      case (occupied s loc', policy) of
+        (False, _)           -> pure (moveTo s loc loc' c')
+        (_, RemoveCarts)     -> pure (removeColliding s loc loc')
         (_, AllowCollisions) -> Left loc'
 
 turnCart :: TrackSegment -> Cart -> Cart
 turnCart seg c = case seg of
+  NoTrack -> error "Ran out of track!"
   Intersection -> let t = nextTurn (cartLastTurn c)
                       d = applyTurn t (cartDirection c)
                    in Cart d t
-  _ -> let t = forcedTurn seg (cartDirection c)
+  _ -> let t = followTrack seg (cartDirection c)
            d = applyTurn t (cartDirection c)
         in c { cartDirection = d }
 
-forcedTurn :: TrackSegment -> Direction -> Turn
-forcedTurn FwdSlash N  = R
-forcedTurn FwdSlash S  = R
-forcedTurn FwdSlash E  = L
-forcedTurn FwdSlash W  = L
-forcedTurn BackSlash N = L
-forcedTurn BackSlash S = L
-forcedTurn BackSlash E = R
-forcedTurn BackSlash W = R
-forcedTurn _ _         = Straight
+followTrack :: TrackSegment -> Direction -> Turn
+followTrack FwdSlash N  = R
+followTrack FwdSlash S  = R
+followTrack FwdSlash E  = L
+followTrack FwdSlash W  = L
+followTrack BackSlash N = L
+followTrack BackSlash S = L
+followTrack BackSlash E = R
+followTrack BackSlash W = R
+followTrack _ _         = Straight
 
-continueAhead :: Cart -> Location -> Location
+continueAhead :: Cart -> Coordinate -> Coordinate
 continueAhead c = moveInDir (cartDirection c)
 
-moveInDir :: Direction -> Location -> Location
-moveInDir N = translate (-1, 0)
-moveInDir S = translate ( 1, 0)
-moveInDir E = translate (0,  1)
-moveInDir W = translate (0, -1)
+moveInDir :: Direction -> Coordinate -> Coordinate
+moveInDir N = translate $ Coord (-1)  0
+moveInDir S = translate $ Coord   1   0
+moveInDir E = translate $ Coord   0   1
+moveInDir W = translate $ Coord   0 (-1)
 
 nextTurn :: Turn -> Turn
-nextTurn t | t == maxBound = minBound
-nextTurn t = succ t
+nextTurn = cycleSucc
 
 applyTurn :: Turn -> Direction -> Direction
 applyTurn Straight d = d
@@ -177,70 +166,75 @@ applyTurn R E        = S
 applyTurn R W        = N
 
 showState :: NetworkMap -> Carts -> String
-showState nmap carts =
-  let ((y0,x0), (yN,xN)) = A.bounds nmap
-      row y = flip fmap [x0 .. xN] $ \x ->
-                let loc = (y,x)
-                 in case (trackSegment nmap loc, M.lookup loc carts) of
-                      (_, Just c) -> case cartDirection c of
-                                       N -> '^'
-                                       S -> 'v'
-                                       W -> '<'
-                                       E -> '>'
-                      (seg, _) -> case toEnum . fromEnum $ seg of
-                                    NS           -> '|'
-                                    EW           -> '-'
-                                    Intersection -> '+'
-                                    FwdSlash     -> '/'
-                                    BackSlash    -> '\\'
-                                    NoTrack      -> ' '
-   in unlines (fmap row [y0 .. yN])
+showState nmap carts = G.draw (fmap drawCell nmap A.// cartOverlay)
+  where
+    cartOverlay = second (drawCart . cartDirection) <$> carts
 
-exampleTrack :: String
-exampleTrack = unlines
-  ["/->-\\        "
-  ,"|   |  /----\\"
-  ,"| /-+--+-\\  |"
+    drawCell NS           = '|'
+    drawCell EW           = '-'
+    drawCell Intersection = '+'
+    drawCell FwdSlash     = '/'
+    drawCell BackSlash    = '\\'
+    drawCell NoTrack      = ' '
+
+    drawCart N = '^'
+    drawCart S = 'v'
+    drawCart W = '<'
+    drawCart E = '>'
+
+exampleTrack :: Text
+exampleTrack = entracken
+  ["╭->-╮        "
+  ,"|   |  ╭----╮"
+  ,"| ╭-+--+-╮  |"
   ,"| | |  | v  |"
-  ,"\\-+-/  \\-+--/"
-  ,"  \\------/   "
+  ,"╰-+-╯  ╰-+--╯"
+  ,"  ╰------╯   "
   ]
 
-removalTrack :: String
-removalTrack = unlines
-  ["/>-<\\"
+removalTrack :: Text
+removalTrack = entracken
+  ["╭>-<╮  "
   ,"|   |  "
-  ,"| /<+-\\"
+  ,"| ╭<+-╮"
   ,"| | | v"
-  ,"\\>+</ |"
+  ,"╰>+<╯ |"
   ,"  |   ^"
-  ,"  \\<->/"
+  ,"  ╰<->╯"
   ]
 
-infiniteTrack :: String
-infiniteTrack = unlines
-  ["/->-\\"
+infiniteTrack :: Text
+infiniteTrack = entracken
+  ["╭->-╮ "
   ,"|   | "
   ,"|   | "
   ,"|   | "
-  ,"\\-<-/ "
+  ,"╰-<-╯ "
   ]
 
-straightLine :: String
-straightLine = "->---<-"
+straightLine :: Text
+straightLine = entracken ["->---<-"]
+
+-- avoid using slashes, for the pretty
+entracken :: [Text] -> Text
+entracken = T.replace "╭" "/"
+          . T.replace "╯" "/"
+          . T.replace "╮" "\\"
+          . T.replace "╰" "\\"
+          . T.unlines
 
 spec :: Spec
 spec = do
   describe "removalTrack" $ do
-    let (nw,cs) = parseInput removalTrack
+    let Right (nw,cs) = parseOnly parseInput removalTrack
     it "should find the last cart location" $ do
-      runN 100 RemoveCarts nw cs `shouldBe` Just (4,6)
+      runN 100 RemoveCarts nw cs `shouldBe` Just (Coord 4 6)
   describe "exampleTrack" $ do
-    let (nw,cs) = parseInput exampleTrack
+    let Right (nw,cs) = parseOnly parseInput exampleTrack
     it "should find the last cart location" $ do
-      runN 100 AllowCollisions nw cs `shouldBe` Just (3,7)
+      runN 100 AllowCollisions nw cs `shouldBe` Just (Coord 3 7)
   describe "infiniteTrack" $ do
-    let (nw,cs) = parseInput infiniteTrack
+    let Right (nw,cs) = parseOnly parseInput infiniteTrack
     it "should find the last cart location" $ do
       runN 1000 AllowCollisions nw cs `shouldBe` Nothing
 

@@ -3,32 +3,36 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE OverloadedStrings #-}
 
 import Control.Applicative
-import Test.Hspec
 import GHC.Generics (Generic)
 import Data.Hashable
-import Control.Arrow
+import Data.Functor
 import qualified Data.Array as A
 import qualified Data.Map.Strict as M
 import qualified Data.HashSet as HS
-import Control.Monad
-import Data.Ord
-import Data.Bool
 import Control.Lens
 import Data.Monoid
 import Data.Maybe
 import Control.Monad.State.Strict
-import qualified Data.List as L
-import qualified Elves.AStar as AStar
+import qualified Data.List.Extra as L
+import           Text.Parser.Char (text)
+import qualified Data.Text as T
+import           Data.Text (Text)
 
-type Location = (Int,Int)
+import           Elves
+import           Elves.Advent
+import qualified Elves.AStar as AStar
+import qualified Elves.StrictGrid as G
+import           Elves.Coord.Strict
+import qualified Elves.Coord as Coord
+
+type Location = Coordinate
 type Dungeon = A.Array Location Feature
 type Creatures = M.Map Location Creature
 
-data Direction = N | S | E | W deriving (Show, Eq)
-data Feature = Wall | Open deriving (Show, Eq)
-
+data Feature    = Wall | Open deriving (Show, Eq)
 data Allegiance = Elf | Goblin deriving (Show, Eq, Generic)
 
 instance Hashable Allegiance
@@ -36,52 +40,56 @@ instance Hashable Allegiance
 newtype CreatureId = CreatureId Int deriving (Show, Eq, Hashable)
 
 data Creature = Creature
-  { _alliegance :: Allegiance
-  , _hp :: Int
-  , _creatureId :: CreatureId
+  { _alliegance :: !Allegiance
+  , _hp :: !Int
+  , _creatureId :: !CreatureId
   } deriving (Show, Eq)
 
 makeLenses ''Creature
 
 data GameState = GameState
-  { _dungeon :: Dungeon
-  , _creatures :: Creatures
-  , _rounds :: Int
-  , _unmoved :: [(Location,Creature)]
-  , _killed :: HS.HashSet CreatureId
-  , _alive :: (Int, Int)
-  , _elfPower :: Int
+  { _dungeon   :: !Dungeon
+  , _creatures :: !Creatures
+  , _rounds   :: {-# UNPACK #-} !Int
+  , _unmoved  :: ![(Location,Creature)]
+  , _killed   :: !(HS.HashSet CreatureId)
+  , _alive    :: {-# UNPACK #-} !(Int, Int)
+  , _elfPower :: {-# UNPACK #-} !Int
   } deriving (Show)
 
 makeLenses ''GameState
+
+aliveLens Goblin = remainingGoblins
+aliveLens Elf    = remainingElves
+
+remainingElves, remainingGoblins :: Lens' GameState Int
+remainingElves   = alive . _1
+remainingGoblins = alive . _2
 
 newtype Game a = Game { runGame :: State GameState a }
   deriving (Functor, Applicative, Monad, MonadState GameState)
 
 main :: IO ()
-main = do
-  gs <- parseInput <$> getContents
-  r <- sim gs
-  
-  print r
-  putStrLn $ "OUTCOME: " ++ show (fullRounds r * totalHP r)
-  let mep = findMinElfPower gs
-  putStrLn $ "MIN ELF POWER: " ++ maybe "impossible" show mep
-  case mep of
-    Nothing -> return ()
-    Just ep -> do let r' = result $ play game gs { _elfPower = ep }
-                  print r'
-                  putStrLn $ "OUTCOME: " ++ show (fullRounds r' * totalHP r')
+main = day 15 parseInput pt1 pt2 spec
+  where
+    pt1 gs = sim gs >>= showOutcome
+    pt2 gs = case findMinElfPower gs of
+               Nothing -> putStrLn "Unwinnable :("
+               Just ep -> do
+                 putStrLn $ "MIN ELF POWER: " <> show ep
+                 showOutcome . result $ play game gs { _elfPower = ep }
+
+    showOutcome r = putStrLn $ "OUTCOME: " <> show (fullRounds r * totalHP r)
 
 
 play :: Game a -> GameState -> GameState
-play g s = execState (runGame g) s
+play g = execState (runGame g)
 
 currentCreatures :: Traversal' GameState Creature
 currentCreatures f gs = 
   let cs = gs ^. creatures & M.toAscList
       fcs = traverse (\(i,c) -> fmap (i,) (f c)) cs
-   in fmap (\cs -> gs & creatures .~ (M.fromAscList cs)) fcs
+   in fmap (\cs -> gs & creatures .~ M.fromAscList cs) fcs
 
 winner :: GameState -> Maybe Allegiance
 winner gs = case gs ^. alive & uncurry compare of
@@ -93,13 +101,9 @@ winner gs = case gs ^. alive & uncurry compare of
 attackPower :: Int
 attackPower = 3
 
-mkCreature :: CreatureId -> Allegiance -> Creature
-mkCreature cid a = Creature a 200 cid
-
 distance :: GameState -> Location -> Location -> Maybe Int
 distance gs origin destination
-  = fmap length
-  $ AStar.aStar neighbours
+  = length <$> AStar.aStar neighbours
                 (\_ _ -> 1)
                 (AStar.euclideanDistance destination)
                 (== destination)
@@ -108,9 +112,11 @@ distance gs origin destination
     neighbours = HS.fromList . openSquares (gs & creatures %~ M.delete destination)
 
 nsew :: Location -> [Location]
-nsew (y,x) = [         (y-1,x)
-             ,(y,x -1),       (y,x+1)
-                      ,(y+1,x)
+nsew x = Coord.translate x <$>
+             [ Coord (-1) 0
+             , Coord 0 (-1)
+             , Coord 0 1
+             , Coord 1 0
              ]
 
 preLoop :: Game ()
@@ -123,7 +129,7 @@ game = do
   preLoop
   gameLoop
   finished <- gameOver
-  if finished then return () else game
+  unless finished game
 
 gameOver :: Game Bool
 gameOver = uses alive (not . allOf both (> 0))
@@ -135,7 +141,7 @@ gameLoop = do
     Nothing ->
       rounds #%= succ
     Just (loc, c) -> do 
-      noEnemy <- uses (alive . aliveLens (target c)) (== 0)
+      noEnemy <- uses (aliveLens (target c)) (== 0)
       if noEnemy then return ()
                  else takeTurn loc c >> gameLoop
 
@@ -165,7 +171,7 @@ target c = case c ^. alliegance of
 takeTurn :: Location -> Creature -> Game ()
 takeTurn pos c = do
   skipped <- uses killed (HS.member (c ^. creatureId))
-  when (not skipped) $ do
+  unless skipped $ do
     mt <- findClosest (target c) pos
     case mt of
       Nothing -> return ()
@@ -195,7 +201,7 @@ openSquares gs = filter canBeMovedTo . nsew
   
 attack :: Allegiance -> Location -> Game ()
 attack side loc = do
-  menemy <- selectTarget side loc
+  menemy <- uses creatures (nextTarget side loc)
   case menemy of
     Nothing -> return ()
     Just (loc, enemy) -> do
@@ -205,81 +211,95 @@ attack side loc = do
       let injured = enemy & hp -~ power
       if dead injured
         then do killed #%= HS.insert (injured ^. creatureId)
-                alive  #%= (aliveLens (injured ^. alliegance) -~ 1)
-        else creatures #%= (M.insert loc injured)
+                aliveLens (injured ^. alliegance) #%= pred
+        else creatures #%= M.insert loc injured
 
-selectTarget :: Allegiance -> Location -> Game (Maybe (Location, Creature))
-selectTarget side loc = do
-  cs <- use creatures
-  return $ listToMaybe
-         . L.sortBy (comparing (view hp . snd &&& fst))
-         . filter ((== side) . view alliegance . snd)
-         . catMaybes
-         . fmap (\l -> (l,) <$> M.lookup l cs)
-         $ nsew loc
-
-aliveLens Goblin = _2
-aliveLens Elf = _1
+nextTarget :: Allegiance -> Location -> Creatures -> Maybe (Location, Creature)
+nextTarget side loc cs
+  = listToMaybe
+  . L.sortOn attackOrder
+  . filter (isA side . snd)
+  . mapMaybe (\l -> (l,) <$> M.lookup l cs)
+  $ nsew loc
 
 dead :: Creature -> Bool
 dead = (<= 0) . view hp
 
-parseInput :: String -> GameState
-parseInput str =
-  let strs = lines str
-      cells = [((y,x), c) | (y, row) <- zip [0 ..] strs
-                         , (x, c) <- zip [0 ..] row
-              ]
-      tiles = zipWith (\i (loc, c) -> cellP (CreatureId i) loc c) [0..] cells
-      walls = HS.fromList [loc | (loc, Wall, _) <- tiles]
-      cs = M.fromList [(loc, crt) | (loc, _, Just crt) <- tiles]
-      bounds = ((0,0), (length strs - 1, maximum (fmap length strs) - 1))
-      dng = A.array bounds [(loc, bool Open Wall (HS.member loc walls))
-                                                   | loc <- A.range bounds]
-   in GameState dng cs 0 [] mempty (length (filter (== 'E') str)
-                                   ,length (filter (== 'G') str)
-                                   )
-                                   attackPower
+isA :: Allegiance -> Creature -> Bool
+isA side = (side ==) . _alliegance
 
+-- prefer the weakest creature, tie breaking on row order.
+attackOrder :: (Coordinate, Creature) -> (Int, Coordinate)
+attackOrder (loc, creature) = (_hp creature, loc)
 
-cellP :: CreatureId -> Location -> Char -> (Location, Feature, Maybe Creature)
-cellP cid loc c = uncurry (loc,,) $ case c of
-  '#' -> (Wall, Nothing)
-  '.' -> (Open, Nothing)
-  'E' -> (Open, Just $ mkCreature cid Elf)
-  'G' -> (Open, Just $ mkCreature cid Goblin)
-  _   -> error $ "Cannot parse dungeon tile: " ++ [c]
+parseInput :: Parser GameState
+parseInput = do
+  board <- G.gridP cellP
+  let dng = fmap fst board
+      cs  = zipWith (\i -> second (creatureId .~ CreatureId i)) [0..]
+          . mapMaybe (\(loc, mc) -> (loc,) <$> mc)
+          . A.assocs
+          $ fmap snd board
+      countOf side = length . filter (isA side . snd) $ cs
+
+  let s = dungeonState dng
+          & creatures .~ M.fromList cs
+          & remainingElves .~ countOf Elf
+          & remainingGoblins .~ countOf Goblin
+
+  pure s
+
+dungeonState :: Dungeon -> GameState
+dungeonState dng = GameState dng mempty 0 [] mempty (0,0) attackPower
+
+cellP :: Parser (Feature, Maybe Creature)
+cellP =   text "#" $> (Wall, Nothing)
+      <|> text "." $> (Open, Nothing)
+      <|> text "E" $> (Open, mkCreature Elf)
+      <|> text "G" $> (Open, mkCreature Goblin)
+  where
+    mkCreature a = pure $ Creature a 200 (CreatureId 0)
 
 showGameState :: Bool -> GameState -> String
 showGameState withCs gs
-  = unlines $ ("After " ++ show (gs ^. rounds) ++ " rounds:")
-            : fmap showRow [r0 .. rN]
+  = unlines [ mconcat ["After ", show (gs ^. rounds), " rounds:"]
+            , G.draw (if withCs then annotated else tiles)
+            ]
   where
-    ((r0,c0),(rN,cN)) = A.bounds (gs ^. dungeon)
-    showCreature c = concat [showSide (c ^. alliegance) 
+    annotated = let d = gs^.dungeon
+                    summaries = [ (r, summary)
+                                | rowg <- L.groupOn (row . fst) $ L.sortOn (row . fst) cs
+                                , let r = row . fst . head $ rowg
+                                , let summary = L.intercalate ", " . fmap (showCreature . snd) $ rowg
+                                ]
+                    extraWidth = 2 + maximum (length . snd <$> summaries)
+                    offset     = 2 + col (snd $ A.bounds d)
+                    bs = let (lb, ub) = A.bounds d
+                          in (lb, Coord.translate (Coord 0 (Col extraWidth)) ub)
+                 in A.listArray bs (repeat ' ')
+                    A.// A.assocs tiles
+                    A.// [ (Coord r (offset + c), chr) | (r, summary) <- summaries
+                                                       , (c, chr) <- zip [0..] summary
+                         ]
+
+    tiles           = fmap tile (gs^.dungeon) A.// creatureOverlay
+    creatureOverlay = second (showSide . view alliegance) <$> cs
+
+    showCreature c = concat [pure (showSide (c ^. alliegance))
                             ,"("
                             ,show (c ^. hp)
                             ,")"
                             ]
-    showSide Elf = "E"
-    showSide Goblin = "G"
-    showRow y = fmap (showTile y) [c0 .. cN] ++ concat [csSummary y | withCs]
-    csSummary y = ("  " ++ )
-                . L.intercalate ", "
-                . fmap (showCreature . snd)
-                . filter ((y ==) . fst . fst)
-                $ (gs ^. creatures & M.toAscList)
 
-    showTile y x = let loc = (y,x)
-                    in tileFor ((gs ^. dungeon) A.! loc)
-                               (gs ^. creatures & M.lookup loc & fmap (view alliegance))
-    tileFor Wall _ = '#'
-    tileFor _ (Just Elf) = 'E'
-    tileFor _ (Just Goblin) = 'G'
-    tileFor _ _ = '.'
+    cs = gs ^. creatures & M.toList
 
-exampleOne :: String
-exampleOne = unlines
+    tile Wall = '#'
+    tile Open = '.'
+    showSide Elf = 'E'
+    showSide Goblin = 'G'
+
+exampleOne :: Text
+exampleOne = T.unlines
   ["#######"
   ,"#E..G.#"
   ,"#...#.#"
@@ -287,8 +307,8 @@ exampleOne = unlines
   ,"#######"
   ]
                       
-exampleTwo :: String
-exampleTwo = unlines
+exampleTwo :: Text
+exampleTwo = T.unlines
   ["#########"
   ,"#G..G..G#"
   ,"#.......#"
@@ -300,8 +320,8 @@ exampleTwo = unlines
   ,"#########"
   ]
 
-exampleThree :: String
-exampleThree = unlines
+exampleThree :: Text
+exampleThree = T.unlines
   ["#######"
   ,"#.G...#"
   ,"#...EG#"
@@ -330,30 +350,33 @@ sim gs = do
      then return (result gs')
      else sim gs'
 
-findMinElfPower :: GameState -> (Maybe Int)
+-- binary search to find a the lowest possible power
+findMinElfPower :: GameState -> Maybe Int
 findMinElfPower gs = go (4,200)
   where 
-    es = fst (gs ^. alive)
-    go rng | A.rangeSize rng < 2 = listToMaybe (A.range rng)
-    go rng = let p = mid rng
-                 gs' = play game gs { _elfPower = p }
-              in if es == fst (gs' ^. alive)
-                   then go (fst rng, p)
-                   else go (p + 1, snd rng)
-    mid rng = A.range rng !! (A.rangeSize rng `div` 2 - 1)
+    e0 = gs ^. remainingElves
+    go rng = case A.rangeSize rng of
+      0 -> Nothing
+      1 -> Just (fst rng)
+      _ -> let p = uncurry Coord.midpoint rng
+               gs' = play game gs { _elfPower = p }
+            in if e0 == gs' ^. remainingElves
+               then go (fst rng, p)
+               else go (p + 1, snd rng)
 
 spec :: Spec
 spec = do
   describe "moveTowards" $ do
-    let gs = parseInput $ unlines ["#######"
-                                  ,"#.E...#"
-                                  ,"#.....#"
-                                  ,"#...G.#"
-                                  ,"#######"
-                                  ]
+    let Right gs = parseOnly parseInput
+                 $ T.unlines ["#######"
+                             ,"#.E...#"
+                             ,"#.....#"
+                             ,"#...G.#"
+                             ,"#######"
+                             ]
     it "should select the elf to move" $ do
       let mc = fst <$> evalState (runGame (preLoop >> nextCreature)) gs
-      mc `shouldBe` Just (1,2)
+      mc `shouldBe` Just (Coord 1 2)
     it "should move the elf right" $ do
       let (l,c) = gs ^. creatures & M.findMin
           gs' = play (takeTurn l c) gs
@@ -368,7 +391,7 @@ spec = do
       showGameState False gs' `shouldBe` expected
 
   describe "exampleThree" $ do
-    let gs = play game (parseInput exampleThree)
+    let Right gs = play game <$> parseOnly parseInput exampleThree
     it "should end after round 47" $ do
       gs ^. rounds `shouldBe` 47
     it "should have been won by the goblins" $ do
@@ -376,10 +399,10 @@ spec = do
     it "the goblins should have 590 hp in total" $ do
       let hps = sum (gs ^.. currentCreatures.hp)
       hps `shouldBe` 590
+
   describe "example rounds" $ do
-    let go = result . play game . parseInput
-        table = [(unlines
-                  ["#######"
+    let solve = fmap (result . play game) . parseOnly parseInput . T.unlines
+        table = [(["#######"
                   ,"#G..#E#"
                   ,"#E#E.E#"
                   ,"#G.##.#"
@@ -388,8 +411,7 @@ spec = do
                   ,"#######" 
                   ], Result (Just Elf) 982 37
                  )
-                ,(unlines
-                  ["#######"
+                ,(["#######"
                   ,"#E..EG#"
                   ,"#.#G.E#"
                   ,"#E.##E#"
@@ -398,8 +420,7 @@ spec = do
                   ,"#######"
                   ], Result (Just Elf) 859 46
                  )
-                ,(unlines
-                  ["#######"
+                ,(["#######"
                   ,"#.E...#"
                   ,"#.#..G#"
                   ,"#.###.#"
@@ -408,8 +429,7 @@ spec = do
                   ,"#######"
                   ], Result (Just Goblin) 536 54
                  )
-                ,(unlines
-                  ["#########"
+                ,(["#########"
                   ,"#G......#"
                   ,"#.E.#...#"
                   ,"#..##..G#"
@@ -421,12 +441,13 @@ spec = do
                   ], Result (Just Goblin) 937 20
                  )
                 ]
+
     forM_ (zip [1 ..] table) $ \(i, (board, expected)) -> do
-      it ("should be able to solve board " ++ show i) $ do
-        go board `shouldBe` expected
+      it ("should be able to solve board " <> show i) $ do
+        solve board `shouldBe` Right expected
 
   describe "exampleTwo" $ do
-    let gs = parseInput exampleTwo
+    let Right gs = parseOnly parseInput exampleTwo
         go = preLoop >> gameLoop
         expected = unlines
                    ["After 3 rounds:"
@@ -443,30 +464,35 @@ spec = do
     it "has moved to the correct position after 3 rounds" $ do
       let gs' = play (go >> go >> go) gs
       showGameState False gs' `shouldBe` expected
+
   describe "attacking" $ do
-    let gs = parseInput $ unlines ["#######"
-                                  ,"#G....#"
-                                  ,"#..G..#"
-                                  ,"#..EG.#"
-                                  ,"#..G..#"
-                                  ,"#...G.#"
-                                  ,"#######"
-                                  ]
+    let Right gs = parseOnly parseInput $ T.unlines
+                   ["#######"
+                   ,"#G....#"
+                   ,"#..G..#"
+                   ,"#..EG.#"
+                   ,"#..G..#"
+                   ,"#...G.#"
+                   ,"#######"
+                   ]
         goblinHP = M.fromList $ zip [1..] [9,4,2,2,1]
-        f (y,x) c = case c ^. alliegance of
+        f loc c = case c ^. alliegance of
                       Elf -> c
-                      Goblin -> c & hp .~ (goblinHP M.! y)
+                      Goblin -> c & hp .~ (goblinHP M.! row loc)
         gs' = gs & creatures #%~ M.mapWithKey f
+
     it "should select the goblin on line 3" $ do
-      fmap fst (evalState (runGame $ selectTarget Goblin (3,3)) gs')
-        `shouldBe` Just (3,4)
+      let target = (Coord 3 4, Creature Goblin 2 (CreatureId 3))
+
+      nextTarget Goblin (Coord 3 3) (gs'^.creatures) `shouldBe` Just target
+
     it "should kill the goblin on line 3" $ do
-      let s = execState (runGame $ attack Goblin (3,3)) gs'
+      let s = execState (runGame $ attack Goblin (Coord 3 3)) gs'
       (s ^. killed & HS.size) `shouldBe` 1
+
   describe "findMinElfPower" $ do
-    let test = findMinElfPower . parseInput
-        table = [(unlines
-                  ["#######"
+    let test = fmap findMinElfPower . parseOnly parseInput . T.unlines
+        table = [(["#######"
                   ,"#.G...#"
                   ,"#...EG#"
                   ,"#.#.#G#"
@@ -475,8 +501,7 @@ spec = do
                   ,"#######"
                   ], 15
                  )
-                ,(unlines
-                  ["#######"
+                ,(["#######"
                   ,"#E..EG#"
                   ,"#.#G.E#"
                   ,"#E.##E#"
@@ -485,8 +510,7 @@ spec = do
                   ,"#######"
                   ], 4
                  )
-                ,(unlines
-                  ["#######"
+                ,(["#######"
                   ,"#E.G#.#"
                   ,"#.#G..#"
                   ,"#G.#.G#"
@@ -495,8 +519,7 @@ spec = do
                   ,"#######" 
                   ], 15
                   )
-                ,(unlines
-                  ["#######"
+                ,(["#######"
                   ,"#.E...#"
                   ,"#.#..G#"
                   ,"#.###.#"
@@ -505,8 +528,7 @@ spec = do
                   ,"#######"
                   ], 12
                  )
-                ,(unlines
-                  ["#########"
+                ,(["#########"
                   ,"#G......#"
                   ,"#.E.#...#"
                   ,"#..##..G#"
@@ -522,6 +544,6 @@ spec = do
       let title = unwords ["min elf power required for example"
                           , show i, "is", show expected
                           ]
-      it title $ do
-        test board `shouldBe` Just expected
+      specify title $ do
+        test board `shouldBe` Right (Just expected)
 

@@ -1,7 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards   #-}
-{-# LANGUAGE TupleSections     #-}
-
 import           Control.Applicative
 import           Control.Lens
 import           Control.Monad
@@ -24,6 +22,9 @@ import           Text.Parser.Char
 import           Text.Parser.Combinators (eof, choice, sepBy1)
 import Text.Printf
 
+import Elves
+import Elves.Advent
+
 type BreakPoint = Int
 type Memory = UA.UArray Int Int
 
@@ -37,7 +38,7 @@ readRegister :: Register -> ActiveMemory s -> ST s Int
 readRegister (Register i) (ActiveMemory m) = unsafeRead m i
 
 writeRegister :: ActiveMemory s -> Register -> Int -> ST s ()
-writeRegister (ActiveMemory m) (Register i) v = unsafeWrite m i v
+writeRegister (ActiveMemory m) (Register i) = unsafeWrite m i
 
 data DebugCommand = SetReg Register Int
                   | Quit
@@ -182,30 +183,52 @@ exampleInput = Text.unlines
 -- an efficient way to actually solve this problem. 
 -- See input.symbolic for the reasoning behind this.
 sumOfFactors :: Int -> Int
-sumOfFactors target =
-  sum [b + b' | b <- takeWhile ((<= target) . join (*)) [1 ..]
-      , let (q,r) = target `divMod` b
+sumOfFactors f =
+  sum [ b + if e == b then 0 else e | b <- takeWhile ((<= f) . join (*)) [1 ..]
+      , let (e,r) = f `divMod` b
       , r == 0
-      , let b' = if b == q then 0 else q
       ]
 
+-- 17: f += 2     # <- programme starts here
+-- 18: f *= f
+-- 19: f *= 19
+-- 20: f *= 11
+-- 21: c += 5
+-- 22: c *= 22
+-- 23: c += 21
+-- 24: f += c
+-- 25: skip a     # <-- pt1. when a = 0, we start with f = 967
+-- 26: goto 1     # Begin the loop
+-- 27: c = 27
+-- 28: c *= 28
+-- 29: c += 29
+-- 30: c *= 30
+-- 31: c *= 14
+-- 32: c *= 32
+-- 33: f = f + c
+runNative :: IO ()
+runNative = do
+  let f = product [4, 19, 11]
+      c = 5 * 22 + 21
+      c' = ((27 * 28) + 29) * product [30, 14, 32]
+      target = f + c + c'
+  putStrLn $ "Target: " <> show target
+  putStrLn $ "Result: " <> show (sumOfFactors target)
+
 main :: IO ()
-main = do
-  args <- getArgs
-  case args of
-    ["pt1"]  -> prg >>= print . runProgramme newMemory
-    ["pt2"]  -> prg >>= print . runProgramme (newMemory & ix 0 .~ 1)
-    ["symbolise"] -> prg >>= putStrLn . symbolicly
-    ["test"] -> do let (Right prg) = parseOnly inputP exampleInput
-                       ret = UA.elems (runProgramme newMemory prg)
-                   if ret == [6, 5, 6, 0, 0, 9]
-                      then putStrLn "OK"
-                      else die $ "FAIL: " ++ show ret
-    _       -> die $ "Bad arguments : " ++ show args
-  where
-    prg = do
-      einp <- parseOnly inputP <$> Text.getContents
-      either die pure einp
+main = generalDay 19 inputP spec
+       [("pt1", print . runProgramme newMemory)
+       ,("pt2", const runNative)
+       ,("symbolise", putStrLn . symbolicly)
+       ]
+
+spec = describe "runProgramme" $ do
+  let Right prg = parseOnly inputP exampleInput
+
+  it "can run the example input" $ do
+    let ret = UA.elems (runProgramme newMemory prg)
+
+    ret `shouldBe` [6, 5, 6, 0, 0, 9]
 
 newMemory :: Memory
 newMemory = UA.listArray (0,5) (repeat 0)

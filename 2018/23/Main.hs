@@ -1,12 +1,11 @@
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TupleSections     #-}
 
 import           Control.Applicative
 import           Control.Lens                (each, (%~), (&))
 import           Control.Monad
 import           Control.Parallel.Strategies
 import           Data.Attoparsec.Text        (Parser, parseOnly)
-import qualified Data.List                   as L
+import qualified Data.List.Extra             as L
 import           Data.Ord
 import qualified Data.Set                    as S
 import qualified Data.Text                   as Text
@@ -17,7 +16,7 @@ import           Text.Parser.Combinators
 import           Text.Parser.Token           (comma, integer')
 import           Text.Printf
 
-import qualified Debug.Trace                 as Debug
+import Elves.Advent
 
 type Distance = Int
 type Coord = (Int,Int,Int)
@@ -28,14 +27,13 @@ data Nanobot = Nanobot { position       :: Coord
                        } deriving (Show, Ord, Eq)
 
 main :: IO ()
-main = do
-  ebots <- parseOnly inputP <$> Text.getContents
-  case ebots of
-    Left err -> die err
-    Right ns -> do printf "Part one: %d\n" (S.size $ partOne ns)
-                   let (x,y,z) = partTwo ns
-                   printf "Part two: %d,%d,%d\n" x y z
-                   printf "distance to point: %d\n" (distance (0,0,0) (x,y,z))
+main = day 23
+           inputP
+           (printf "Part one: %d\n" . S.size . partOne)
+           (\ns -> do let (x,y,z) = partTwo ns
+                      printf "Part two: %d,%d,%d\n" x y z
+                      printf "distance to point: %d\n" (distance (0,0,0) (x,y,z)))
+           (pure ())
 
 partOne :: [Nanobot] -> S.Set Nanobot
 partOne ns = let b = L.maximumBy (comparing signalStrength) ns
@@ -89,8 +87,7 @@ searchDividing ns = go . pure
   where
     go rs
       | all (== 1) (size <$> rs) = L.minimumBy (comparing distanceHome) (fst <$> rs)
-      | otherwise = Debug.traceShow (length rs) $
-                     go (keepBest $ scored (rs >>= divide))
+      | otherwise = go (keepBest $ scored (rs >>= divide))
 
     scored rs = zip rs (fmap (nReachable ns) rs)
 
@@ -179,16 +176,13 @@ rightOf ((xmin,ymin,zmin),(xmax,ymax,zmax)) (x,y,z) = and [xmax < x
 
 corners :: Region -> [Coord]
 corners ((x,y,z),(x',y',z'))
-  = L.nub [(a,b,c) | a <- [x,x'], b <- [y,y'], c <- [z,z']]
+  = L.nubOrd [(a,b,c) | a <- [x,x'], b <- [y,y'], c <- [z,z']]
 
 contains :: Region -> Coord -> Bool
-contains ((xmin,ymin,zmin),(xmax,ymax,zmax)) (x,y,z) = and [xmin <= x
-                                                          ,xmax >= x
-                                                          ,ymin <= y
-                                                          ,ymax >= y
-                                                          ,zmin <= z
-                                                          ,zmax >= z
-                                                          ]
+contains ((xmin,ymin,zmin),(xmax,ymax,zmax)) (x,y,z) = and [ xmin <= x, x <= xmax
+                                                           , ymin <= y, y <= ymax
+                                                           , zmin <= z, z <= zmax
+                                                           ]
 
 -- the coordinate with the best signal strength must lie within the bounding box of
 -- all the bots themselves. This function builds the bounds for that bounding box in
