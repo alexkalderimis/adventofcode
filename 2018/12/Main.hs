@@ -1,4 +1,3 @@
-{-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 import           Control.Applicative
@@ -15,16 +14,15 @@ import           Data.Maybe
 import           Data.Text                    (Text)
 import qualified Data.Text                    as Text
 
-import           Text.Parser.Char
 import           Text.Parser.Combinators      (choice, sepBy1, sepByNonEmpty)
 import           Text.Read                    (readMaybe)
 import           Data.Attoparsec.Text (parseOnly, Parser)
-import           Text.Parser.Char (text, newline)
+import           Text.Parser.Char (text, newline, char)
 
 import Test.QuickCheck.Arbitrary (Arbitrary (arbitrary))
 import Test.QuickCheck (property)
 
-import Elves
+import Elves hiding (right, left)
 import Elves.Advent (day)
 import qualified Elves.Zipper as Z
 import           Elves.Zipper (Zipper, left, right)
@@ -108,20 +106,17 @@ plantP :: Parser Bool
 plantP = choice [True <$ char '#', False <$ char '.']
 
 ruleP :: Parser PlantRule
-ruleP = do
-  l1 <- plantP
-  l0 <- plantP
-  c  <- plantP
-  r0 <- plantP
-  r1 <- plantP
-  string " => "
-  ret <- plantP
-  return (PlantRule l1 l0 c r0 r1 ret)
+ruleP = PlantRule <$> plantP
+                  <*> plantP
+                  <*> plantP
+                  <*> plantP
+                  <*> plantP
+                  <*> (text " => " *> plantP)
 
 compileRules :: [PlantRule] -> Rule Bool Bool
 compileRules rs =
   let patterns = buildPatterns rs
-   in \ma mb mc md me -> let pat = fmap (fromMaybe False) $ [ma, mb, mc, md, me]
+   in \ma mb mc md me -> let pat = fromMaybe False <$> [ma, mb, mc, md, me]
                           in S.member pat patterns
 
 -- Array based cellular automoton, rather than the more elegant
@@ -173,7 +168,7 @@ showState :: Zipper Bool -> Text
 showState = Text.pack . fmap showPlant . Z.toList . Z.seekStart
 
 showRule :: PlantRule -> String
-showRule r = fmap showPlant inputs ++ " => " ++ [showPlant (ret r)]
+showRule r = fmap showPlant inputs <> " => " <> [showPlant (ret r)]
   where inputs = [l1 r, l0 r, c r, r0 r, r1 r]
 
 showPlant :: Bool -> Char
