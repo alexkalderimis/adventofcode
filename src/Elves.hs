@@ -20,18 +20,21 @@ module Elves (
   collapseForest,
   atMost, atLeast,
   on2,
+  allPreds, anyPreds,
   (.*),
   (<#>),
+  (<||>), (<&&>),
   module X
   ) where
 
+import Control.Arrow as X
 import Control.Monad.State.Class
 import Control.Applicative as X
 import Control.Monad as X
 import Control.Monad.Reader
 import Data.List as L
 import Data.Maybe as X
-import Data.Monoid
+import Data.Monoid as X
 import Data.Ord as X
 import Data.Tree (Forest,Tree(..))
 import Data.Bool
@@ -43,6 +46,14 @@ import Data.Attoparsec.Text as X (Parser, parseOnly)
 
 (<#>) :: Applicative f => f a -> f b -> f (a,b)
 (<#>) = liftA2 (,)
+
+infixl 3 <||>
+(<||>) :: (a -> Bool) -> (a -> Bool) -> a -> Bool
+f <||> g = (||) <$> f <*> g
+
+infixl 3 <&&>
+(<&&>) :: (a -> Bool) -> (a -> Bool) -> a -> Bool
+f <&&> g = (&&) <$> f <*> g
 
 pairs :: [a] -> [(a, a)]
 pairs l = [(x,y) | (x:ys) <- tails l, y <- ys]
@@ -70,7 +81,7 @@ cycleSucc x = if x == maxBound then minBound
                                else succ x
 
 best :: Ord b => (a -> b) -> [a] -> Maybe a
-best f = listToMaybe . sortBy (comparing (Down . f))
+best f = listToMaybe . sortOn (Down . f)
 
 median :: Ord a => [a] -> Maybe a
 median xs = let xs' = sort xs
@@ -162,3 +173,8 @@ on2 f da eb d e = f (da d) (eb e)
 (.*) :: (c -> d) -> (a -> b -> c) -> a -> b -> d
 (f .* g) a b = f (g a b)
 
+allPreds :: [a -> Bool] -> a -> Bool
+allPreds = (getAll .) . mconcat . fmap (All .)
+
+anyPreds :: [a -> Bool] -> a -> Bool
+anyPreds = (getAny .) . mconcat . fmap (Any .)

@@ -1,13 +1,19 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 
 module Elves.Coord.Strict where
 
+import GHC.Generics (Generic)
+import Data.Hashable
 import Control.Lens.Combinators (Lens, view, ReifiedLens(..))
 import qualified Data.Ix as Ix
 import           Data.Ix (Ix)
+import           Text.Printf
 
 import Elves.Coord
+import Elves.AStar (CartesianCoordinate(..))
 
 data Point2 = P2 { p2x :: {-# UNPACK #-} !Int
                  , p2y :: {-# UNPACK #-} !Int
@@ -18,13 +24,17 @@ data Point3 = P3 { p3x :: {-# UNPACK #-} !Int
                  , p3z :: {-# UNPACK #-} !Int
                  } deriving (Eq, Show, Ord)
 
-newtype Row = Row { getRow :: Int } deriving (Show, Eq, Ord, Ix, Enum, Num)
-newtype Col = Col { getCol :: Int } deriving (Show, Eq, Ord, Ix, Enum, Num)
+newtype Row = Row { getRow :: Int }
+  deriving (Show, Eq, Ord, Ix, Enum, Num, PrintfArg, Hashable)
+newtype Col = Col { getCol :: Int }
+  deriving (Show, Eq, Ord, Ix, Enum, Num, PrintfArg, Hashable)
 
 data Coordinate = Coord 
   { row :: {-# UNPACK #-} !Row
   , col :: {-# UNPACK #-} !Col
-  } deriving (Show, Eq, Ord)
+  } deriving (Show, Eq, Ord, Generic)
+
+instance Hashable Coordinate
 
 class PointX a where
   _px :: Lens a a Int Int
@@ -87,3 +97,6 @@ instance Ix Coordinate where
   range (a, b) = [Coord r c | (r, c) <- Ix.range ((row a, col a), (row b, col b))]
   index (a, b) x = Ix.index ((row a, col a), (row b, col b)) (row x, col x)
   inRange (a, b) x = Ix.inRange ((row a, col a), (row b, col b)) (row x, col x)
+
+instance CartesianCoordinate Coordinate Int where
+  points (Coord (Row y) (Col x)) = [x, y]
