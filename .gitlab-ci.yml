@@ -30,7 +30,7 @@ build:elves:
 
 lint:
   stage: lint
-  image: coorde/hlint
+  image: itprotv/hlint:2f349961f24bc208a44c753c151bdaef0b2b16b5
   script:
     - hlint src
     - hlint test
