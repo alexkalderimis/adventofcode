@@ -23,7 +23,7 @@ newtype PackageID = PackageID Word8 deriving (Show, Eq, Ord)
 data Packet = Packet { packetVersion :: !Version, packetPayload :: !Payload }
             deriving (Show, Eq)
 
-data Operation = Sum | Product | Minimum | Maximum | GreaterThan | LessThan | Equal
+data Operation = SumOp | ProductOp | Minimum | Maximum | GreaterThan | LessThan | Equal
             deriving (Show, Eq)
 
 data Payload
@@ -130,8 +130,8 @@ evaluate :: Packet -> Word
 evaluate p = case packetPayload p of
   Literal v -> v
   Operator op operands -> let values = fmap evaluate operands
-                           in case op of Sum -> sum values
-                                         Product -> product values
+                           in case op of SumOp -> sum values
+                                         ProductOp -> product values
                                          Minimum -> minimum values
                                          Maximum -> maximum values
                                          GreaterThan -> let [a, b] = values in if a > b then 1 else 0
@@ -144,7 +144,7 @@ parseTokens :: PacketParser Packet -> Tokens -> Either (SP.ParseError Bit) Packe
 parseTokens = SP.parse
 
 tokenize :: Text -> Tokens
-tokenize = Seq.fromList . (>>= bits) . T.unpack
+tokenize = Seq.fromList . (bits <=< T.unpack)
 
 parse :: Text -> Parser Packet
 parse = either (fail . renderError) pure . parseTokens p . tokenize
@@ -156,7 +156,7 @@ packetP :: PacketParser Packet
 packetP = do
   v <- Version <$> word3BE
   pid <- PackageID <$> word3BE
-  if pid == (PackageID 4)
+  if pid == PackageID 4
      then Packet v <$> literalP
      else Packet v <$> operatorP pid
 
@@ -168,8 +168,8 @@ operatorP (PackageID pid) = do
     O -> bitLengthPackets
 
 operation :: Word8 -> Operation
-operation 0 = Sum
-operation 1 = Product
+operation 0 = SumOp
+operation 1 = ProductOp
 operation 2 = Minimum
 operation 3 = Maximum
 operation 5 = GreaterThan
