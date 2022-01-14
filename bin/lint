@@ -1,0 +1,3 @@
+#!/bin/bash
+
+hlint src test app 2015 2017 2018 2019 2020 2021

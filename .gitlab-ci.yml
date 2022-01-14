@@ -23,38 +23,13 @@ build:elves:
   script:
     - stack build
 
-build:puzzles:
-  stage: build
-  needs: ["build:elves"]
-  script:
-    - ./bin/build-year
-  parallel:
-    matrix:
-      - YEAR:
-          - 2021
-          - 2019
-          - 2018
-          - 2017
-
 test:lint:
   stage: test
-  before_script:
-    - curl -sSL https://raw.github.com/ndmitchell/hlint/master/misc/run.sh | sh -s .
+  image: coorde/hlint
   script:
-    - hlint $DIR
-  parallel:
-    matrix:
-      - DIR:
-         - src
-         - test
-         - app
-         - 2021
-         - 2020
-         - 2019
-         - 2018
-         - 2017
-         - 2016
-         - 2015
+    - hlint src
+    - hlint test
+    - hlint app
 
 test:elves:
   stage: test
@@ -62,67 +37,15 @@ test:elves:
   script:
     - stack test
 
-.puzzles:
-  stage: test
-  needs: ["test:elves", "build:puzzles"]
-  script:
-    - stack run $YEAR $DAY test
-    - stack run $YEAR $DAY pt1
-    - stack run $YEAR $DAY pt2
-
 test:puzzles:2021:
-  extends: .puzzles
+  stage: test
+  needs: ["test:elves"]
+  script:
+    - ./bin/run-year
   parallel:
     matrix:
-      - YEAR: 2021
-        DAY:
-          - 1
-          - 2
-          - 3
-          - 4
-          - 5
-          - 6
-          - 7
-          - 8
-          - 9
-          - 10
-          - 11
-          - 12
-          - 13
-          - 14
-          - 15
-          - 16
-          - 17
-          - 18
-
-test:puzzles:2017:
-  extends: .puzzles
-  parallel:
-    matrix:
-      - YEAR: 2021
-        DAY:
-          - 1
-          - 2
-          - 3
-          - 4
-          - 5
-          - 6
-          - 7
-          - 8
-          - 9
-          - 10
-          - 11
-          - 12
-          - 13
-          - 14
-          - 15
-          - 16
-          - 17
-          - 18
-          - 19
-          - 20
-          - 21
-          - 22
-          - 23
-          - 24
-          - 25
+      - YEAR:
+          - 2017
+          - 2019
+          - 2018
+          - 2021
