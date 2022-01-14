@@ -3,6 +3,11 @@ image: haskell:8.10.7
 variables:
   STACK_ROOT: "${CI_PROJECT_DIR}/.stack-root"
 
+stages:
+  - build
+  - test
+  - lint
+
 cache:
   key:
     files:
@@ -23,8 +28,8 @@ build:elves:
   script:
     - stack build
 
-test:lint:
-  stage: test
+lint:
+  stage: lint
   image: coorde/hlint
   script:
     - hlint src
@@ -37,7 +42,7 @@ test:elves:
   script:
     - stack test
 
-test:puzzles:2021:
+test:puzzles:
   stage: test
   needs: ["test:elves"]
   script:
