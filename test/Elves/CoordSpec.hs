@@ -4,6 +4,7 @@
 
 module Elves.CoordSpec (spec) where
 
+import           Data.Bifunctor (bimap)
 import           Control.Monad (forM_)
 import           Data.Maybe
 import           System.Random
@@ -41,6 +42,7 @@ spec = describe "Elves.Coord" $ do
   straightLineSpec
   manhattanSpec
   closestPointSpec
+  cornersSpec
 
 translateSpec = describe "translate" $ do
   specify "translate dx . translate (invert dx) === id, for 2-tuples" $ property $ \dx px ->
@@ -188,12 +190,12 @@ overlapsSpec = describe "overlaps" $ do
 
     let lhs = ((0,-4,0),(0,4,0))
         rhs = ((-3,-3,-3),(3,3,3))
-     in specify (show lhs ++ " overlaps " ++ show rhs) $ do
+     in specify (show lhs <> " overlaps " <> show rhs) $ do
          lhs `shouldSatisfy` overlaps rhs
 
     let lhs = ((0,-4,0,0),(0,4,0,0))
         rhs = ((-3,-3,-3,-3),(3,3,3,3))
-     in specify (show lhs ++ " overlaps " ++ show rhs) $ do
+     in specify (show lhs <> " overlaps " <> show rhs) $ do
          lhs `shouldSatisfy` overlaps rhs
 
     specify "all cubes that are within other cubes also overlap" $
@@ -233,25 +235,42 @@ manhattanSpec = describe "manhattan" $ do
       manhattan a (b :: Point) == sum (mindists (a,a) (b,b))
 
 closestPointSpec = describe "closestPoint" $ do
-    specify "The closest point is closer by any measure, in 1D" $
-      withMaxSuccess 10000 $
-      forAll arbitrary                  $ \(Range r) ->
-      forAll (chooseInt (fst r, snd r)) $ \x -> \h p ->
+    specify "The closest point inside a range is the point, in 1D" $
+      many $
+      forAll arbitrary               $ \(Range r) ->
+      forAll (chooseInt r)           $ \x ->
+        closestPoint x r === x
+
+    specify "The closest point is closer than any point in that range by any measure, in 1D" $
+      many $
+      forAll arbitrary               $ \(Range r) ->
+      forAll (chooseInt r)           $ \x h p ->
         let cp = closestPoint p r
          in measure h p cp <= measure h p x
 
-    specify "The closest point is closer by any measure, in 2D" $
-      withMaxSuccess 10000 $
-      forAll arbitrary                              $ \(Region r) ->
-      forAll (chooseInt (fst (fst r), fst (snd r))) $ \x ->
-      forAll (chooseInt (snd (fst r), snd (snd r))) $ \y -> \h p ->
+    specify "The closest point inside a region is the point, in 2D" $
+      many $
+      forAll arbitrary            $ \(Region r) ->
+      forAll (anyPointInRegion r) $ \p ->
+        closestPoint p r === p
+
+    specify "The closest point is closer than any point in that region by any measure, in 2D" $
+      many $
+      forAll arbitrary            $ \(Region r) ->
+      forAll (anyPointInRegion r) $ \inside h p ->
         let cp = closestPoint p r
-         in measure h p cp <= measure h p (x,y)
+         in measure h p cp <= measure h p inside
 
     specify "The closest point is closer by any measure, in 3D" $
-      withMaxSuccess 1000 $ \h p (CubeWithPoint (Cube c) point)->
-        let cp = closestPoint p c
-         in measure h p cp <= measure h p point
+      many $ \h anyp (CubeWithPoint (Cube c) inner) ->
+        let cp = closestPoint anyp c
+         in measure h anyp cp <= measure h anyp inner
+
+  where
+    many f = withMaxSuccess 500 (property f) -- ranges can get big, so we probably need more than the usual 100
+    anyPointInRegion r = do x <- chooseInt (fst (fst r), fst (snd r))
+                            y <- chooseInt (snd (fst r), snd (snd r))
+                            pure (x,y)
 
 mindistSpec = describe "mindist" $ do
   let shouldBeDbl a b = abs (a - b) `shouldSatisfy` (< (0.000001 :: Double))
@@ -298,3 +317,23 @@ mindistSpec = describe "mindist" $ do
 
 expandSpec = describe "expandB" $ do
     it "is commutative" $ property $ \(Cube a) (Cube b) -> expandB a b === expandB b a
+
+cornersSpec = describe "corners" $ do
+  context "for ranges" $ do
+    specify "there are two corners" $ property $ \(Range r) ->
+      length (corners r) `shouldBe` 2
+    specify "the corners are the extrema" $ property $ \(Range r) ->
+      corners r `shouldMatchList` [fst r, snd r]
+  context "for regions" $ do
+    specify "there are four corners" $ property $ \(Region r) ->
+      length (corners r) `shouldBe` 4
+    specify "the corners are the extrema" $ property $ \(Region r) ->
+      corners r `shouldMatchList` [fst r, snd r
+                                  ,(fst (fst r), snd (snd r))
+                                  ,(fst (snd r), snd (fst r))
+                                  ]
+  context "for cubes" $ do
+    specify "there are eight corners" $ property $ \(Cube r) ->
+      length (corners r) `shouldBe` 8
+    specify "all corners are on an edge" $ property $ \(Cube r) ->
+      corners r `shouldSatisfy` all (onEdge r)

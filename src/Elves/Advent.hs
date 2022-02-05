@@ -39,34 +39,51 @@ day :: Int      -- ^ The day (1..25)
     -> Part a   -- ^ An implementation for part-two (available once part-one is solved)
     -> Spec     -- ^ A test suite
     -> IO ()    -- ^ The main action
-day n parser pt1 pt2 spec = generalDay n parser spec [("pt1", pt1), ("pt2", pt2)]
+day n parser pt1 pt2 spec = getArgs >>= runDay n parser spec [("pt1", pt1), ("pt2", pt2)]
+
+-- for exercises with simple input that can be inlined, and this is known statically
+staticDay :: Int -> IO () -> IO () -> Spec -> IO ()
+staticDay n pt1 pt2 spec = getArgs >>= runDay n (pure ()) spec parts
+  where
+    parts = [("pt1", const pt1), ("pt2", const pt2)]
 
 generalDay :: Int
     -> Parser a -- ^ A Parser for the input, received on stdin
     -> Spec     -- ^ A test suite
     -> [(String, Part a)] -- named parts
     -> IO ()    -- ^ The main action
-generalDay n parser spec parts = do
-  args <- getArgs
-  case args of
-    ("test":test_args) -> withArgs test_args $ hspec (describe ("Day " <> show n) spec)
-    (name:rst) -> case lookup name parts of
-      Just part -> withArgs rst (namedTime name (getInput >>= part))
-      _         -> die ("bad arguments. Expected one of " <> L.intercalate ", " (fst <$> parts) <> " or test, got: " <> unwords args)
+generalDay n parser spec parts = getArgs >>= runDay n parser spec parts
+
+runDay :: Int
+    -> Parser a -- ^ A Parser for the input, received on stdin
+    -> Spec     -- ^ A test suite
+    -> [(String, Part a)] -- named parts
+    -> [String] -- command line arguments
+    -> IO ()    -- ^ The main action
+runDay n parser spec parts args
+  | ("test":test_args) <- args
+  = withArgs test_args $ hspec (describe ("Day " <> show n) spec)
+
+  | ["all"] <- args
+  = do inp <- getInput
+       runTests []
+       forM_ parts $ \(name, part) -> putStrLn "" >> namedTime name (part inp)
+
+  | (name:rst) <- args
+  , Just part <- lookup name parts 
+  = withArgs rst (namedTime name (getInput >>= part))
+  
+  | otherwise = badArgs
   where
+    badArgs = die . unwords $ [ "bad arguments."
+                              , "Expected one of"
+                              , L.intercalate ", " (fst <$> parts)
+                              , "or test, got:"
+                              ] <> args
+
+    runTests args = withArgs args $ hspec (describe ("Day " <> show n) spec)
     getInput = Text.getContents >>= either (die . ("Could not parse input! " ++)) pure
                                     . parseOnly (parser <* (many newline >> endOfInput))
-
--- for exercises with simple input that can be inlined, and this is known statically
-staticDay :: Int -> IO () -> IO () -> Spec -> IO ()
-staticDay n pt1 pt2 spec = do
-  args <- getArgs
-  case args of
-    ("pt1":rst)  -> withArgs rst (namedTime "pt1" pt1)
-    ("pt2":rst)  -> withArgs rst (namedTime "pt2" pt2)
-    ("test":test_args) -> withArgs test_args
-                          $ hspec (describe ("Day " <> show n) spec)
-    _        -> die "bad arguments. Expected pt1, pt2 or test"
 
 namedTime :: String -> IO a -> IO a
 namedTime name act = do

@@ -8,21 +8,22 @@
 {-# LANGUAGE UndecidableInstances #-}
 
 module Elves.RTree (
-  Extendable, Bounds, Queryable, QueryStrategy(..), RTree,
+  Extendable, Bounds, Queryable, QueryStrategy(..), RTree, Neighbour(..),
   singleton, region, point, bounds, bounds', indexed, locations, assocs, elems, keys,
   maxPageSize, size, sizeWith, extent, null,
   fromList, fromPoints, fromPointsWith, fromListWith, 
   alter, alterM, delete, insert, insertPoint, insertWith, empty,
   unions, union, unionWith,
   subtrees, leaves, forest, fromTree, depth, minDepth,
-  query, popQuery, member, lookup, nearestNeighbour, nearestNeighbourK, nearestNeighbours,
+  query, popQuery, overlaps, within,
+  member, lookup, priorityOrder, nearestNeighbour, nearestNeighbourK, nearestNeighbours,
   expandQuery, drawTree, diffTree, overlapping
   ) where
 
 import           Prelude                   hiding (lookup, null)
 
 import           Control.Applicative       hiding (empty)
-import           Control.Arrow             (first)
+import           Control.Arrow             (first, (&&&))
 import           Control.DeepSeq           (NFData (..))
 import           Control.Lens              hiding (contains, indexed)
 import           Control.Monad             (foldM)
@@ -32,8 +33,10 @@ import           Data.Function             (on)
 import           Data.Functor.Classes      (Eq1 (..), Eq2 (..))
 import           Data.Functor.Identity     (Identity(..))
 import           Data.Hashable             (Hashable)
+
 import           Data.Heap                 (Entry (..), Heap)
 import qualified Data.Heap                 as Heap
+
 import qualified Data.List.Extra           as L
 import           Data.List.NonEmpty        (NonEmpty (..))
 import qualified Data.List.NonEmpty        as NE
@@ -50,7 +53,7 @@ import           Test.QuickCheck.Arbitrary (Arbitrary (arbitrary, shrink),
                                             arbitraryBoundedEnum)
 import           Test.QuickCheck.Gen       (chooseInt, suchThat)
 
-import           Elves.Coord (Bounds, Extent, Coord, Dimension, expandB, dimensions, straightLine, overlaps)
+import           Elves.Coord (Bounds, Extent, Coord, Dimension, expandB, dimensions, straightLine)
 import qualified Elves.Coord as Coord
 import           Elves.Core
 import           Elves (median)
@@ -58,6 +61,12 @@ import           Elves (median)
 type Extendable i = (Queryable i, Extent (Dimension i))
 
 type Queryable i =  (Coord i, Num (Dimension i), Eq (Dimension i), Ord (Dimension i))
+
+data Neighbour i a d = Neighbour
+  { neighbourLocation :: !(Bounds i)
+  , neighbour :: !a
+  , neighbourDistance :: !d
+  } deriving (Show, Eq)
 
 newtype ArbitraryBounds i = ArbitraryBounds
   { arbitraryBounds :: (i, i)
@@ -476,7 +485,7 @@ instance Arbitrary QueryStrategy where
 matches :: (Queryable i) => QueryStrategy -> Bounds i -> Bounds i -> Bool
 matches Precisely   = (==)
 matches Within      = Coord.contains
-matches Overlapping = overlaps
+matches Overlapping = Coord.overlaps
 
 query :: (Queryable i) => QueryStrategy -> (i,i) -> RTree i a -> [(Bounds i,a)]
 query strat q t
@@ -489,6 +498,13 @@ query strat q t
   = pure ( (i, j), a )
 
   | otherwise = []
+
+-- sugar for common use cases
+overlaps :: (Queryable i) => (i,i) -> RTree i a -> [(Bounds i,a)]
+overlaps = query Overlapping
+
+within :: (Queryable i) => (i,i) -> RTree i a -> [(Bounds i,a)]
+within = query Within
 
 -- find and remove matching values from the tree
 popQuery :: (Queryable i) => QueryStrategy -> (i,i) -> RTree i a -> ([(Bounds i, a)], RTree i a)
@@ -526,29 +542,29 @@ nearestNeighbourK dist n pnt = take n . nearestNeighbours dist pnt
 -- presence.
 nearestNeighbours :: (Queryable i, Real b)
                   => (i -> i -> b) -> i -> RTree i a -> [(Bounds i,a)]
-nearestNeighbours dist pnt = filter ((/= (pnt,pnt)) . fst)
+nearestNeighbours dist pnt = fmap (neighbourLocation &&& neighbour)
+                           . filter ((/= (pnt,pnt)) . neighbourLocation)
                            . priorityOrder dist pnt
 
 -- returns tree sorted into priority order.
--- Returns all objects in the tree
-priorityOrder :: (Queryable i, Real b)
-              => (i -> i -> b) -> i -> RTree i a -> [(Bounds i,a)]
-priorityOrder dist pnt = L.unfoldr go . (enqueue =<< priorityQueue)
+-- Returns all objects in the tree, along with the output of the distance function.
+priorityOrder :: (Queryable i, Ord b)
+              => (i -> i -> b) -> i -> RTree i a -> [Neighbour i a b]
+priorityOrder dist pnt = L.unfoldr go . enqueue Heap.empty
   where
-    d = realToFrac . dist pnt . Coord.closestPoint pnt
+    d = (dist pnt . Coord.closestPoint pnt) &&& id
+
     enqueue q t = case fmap d (bounds t) of
       Just d' -> Heap.insert (Entry d' t) q
-      _       -> q
+      _       -> q -- ensures we never enqueue tips
 
     go q = do
       (e,q') <- Heap.uncons q
       case Heap.payload e of
         Tip           -> go q' -- impossible, but harmless
-        Leaf i j a    -> pure (((i,j),a),q')
+        Leaf _ _ a    -> let (b, bs) = Heap.priority e
+                          in Just (Neighbour bs a b, q')
         Region _ _ ts -> go (L.foldl' enqueue q' ts)
-
-priorityQueue :: RTree i a -> Heap (Entry Double (RTree i a))
-priorityQueue _ = Heap.empty
 
 -- is rhs entirely within lhs?
 contains :: (Coord i, Ord (Dimension i), Num (Dimension i))
@@ -560,7 +576,7 @@ includes bs = maybe False (Coord.contains bs) . bounds
 
 overlapping :: (Coord i, Num (Dimension i), Ord (Dimension i))
             => RTree i a -> RTree i a -> Bool
-overlapping a b = fromMaybe False $ liftA2 overlaps (bounds a) (bounds b)
+overlapping a b = fromMaybe False $ liftA2 Coord.overlaps (bounds a) (bounds b)
 
 -- how much bigger does rhs hand need to be to encompass lhs?
 expansion :: (Extendable i) => RTree i a -> RTree i a -> Dimension i

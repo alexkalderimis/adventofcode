@@ -1,22 +1,19 @@
 import Data.Monoid
-import System.Environment
 import Data.List (intercalate)
 import qualified Data.IntSet as Set
+import           Text.Parser.Char (newline)
+import qualified Data.Attoparsec.Text as A
+import           Control.Applicative.Combinators
+
+import Elves
+import Elves.Advent
 
 main :: IO ()
-main = do
-  args <- getArgs
-  changes <- fmap (fmap parse . lines) getContents 
-  case args of
-    ["sum"]          -> print (sum changes)
-    ["first-repeat"] -> print (firstRepeated $ cycle changes)
-    _  -> error $ "Bad args: " <> intercalate " " args
+main = day 1 parser pt1 pt2 (pure ())
   where
-    parse (sign:str) = let f = case sign of
-                                '+' -> id
-                                '-' -> negate
-                                _   -> error $ "bad sign: " <> [sign]
-                        in f $ read str
+    pt1 = print . sum
+    pt2 = print . firstRepeated . cycle
+    parser = A.signed A.decimal `sepBy1` newline 
 
 firstRepeated :: [Int] -> Maybe Int
 firstRepeated = go (Set.singleton 0, 0)

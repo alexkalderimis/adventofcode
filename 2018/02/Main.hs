@@ -1,21 +1,32 @@
-{-# LANGUAGE MultiWayIf #-}
-{-# LANGUAGE BangPatterns #-}
+import Data.List.Extra
+import Data.Attoparsec.Text (takeText)
+import qualified Data.Text as T
 
-import Data.Monoid
-import Data.List
+import Elves
+import Elves.Advent
+
+main :: IO ()
+main = day 2 parser pt1 pt2 spec
+  where
+    pt1 lines = let (twos,threes) = unzip . fmap twosAndThrees $ lines
+                    checksum = getSum (mconcat twos) * getSum (mconcat threes)
+                 in putStrLn $ "Checksum: " <> show checksum
+
+    pt2 = mapM_ putStrLn . commonElemsOfboxIdsDifferingBy 1
+
+    parser = fmap T.unpack . T.lines <$> takeText
+
+commonElemsOfboxIdsDifferingBy :: Int -> [String] -> [String]
+commonElemsOfboxIdsDifferingBy n lines
+  = nubOrd $ sort [ common boxA boxB | (boxA,boxB) <- pairs lines
+                                     , diffsAtPosition boxA boxB == n
+                                     ]
 
 twosAndThrees :: String -> (Sum Int, Sum Int)
-twosAndThrees input = (twos sorted, threes sorted)
+twosAndThrees input = (findSum 2 groupCounts, findSum 3 groupCounts)
   where
-    sorted = sort input
-    twos = go 2 0 Nothing
-    threes = go 3 0 Nothing
-    go target !n curr [] = if target == n then Sum 1 else Sum 0
-    go target !n Nothing (x:xs) = go target (n + 1) (Just x) xs
-    go target !n (Just x') (x:xs) =
-      if | x      == x' -> go target (n + 1) (Just x) xs
-         | target == n  -> Sum 1
-         | otherwise    -> go target 1 (Just x) xs
+    groupCounts = filter (\x -> x == 2 || x == 3) . fmap length . group $ sort input
+    findSum n = foldMap (pure (Sum 1)) . find (== n)
 
 diffsAtPosition as bs = getSum . mconcat $ zipWith f as bs
   where
@@ -23,21 +34,37 @@ diffsAtPosition as bs = getSum . mconcat $ zipWith f as bs
     f _ _          = Sum 1
 
 common :: Eq a => [a] -> [a] -> [a]
-common as bs = zip as bs >>= \(a,b) -> if a == b then [a] else []
+common as bs = zip as bs >>= \(a,b) -> [a | a == b]
 
-pairs :: [a] -> [(a, a)]
-pairs l = [(x,y) | (x:ys) <- tails l, y <- ys]
-
-main :: IO ()
-main = do
-  strings <- lines <$> getContents
-  let (twos,threes) = unzip . fmap twosAndThrees $ strings
-      checksum = getSum (mconcat twos) * getSum (mconcat threes)
-  putStrLn $ "Checksum: " <> show checksum
-  let fingerprints = [common boxA boxB
-                       | (boxA,boxB) <- pairs strings
-                       , diffsAtPosition boxA boxB == 1
-                       ]
-  mapM_ print (nub . sort $ fingerprints)
-
-
+spec = do
+  describe "twosAndThrees" $ do
+    specify "abcdef contains no letters that appear exactly two or three times." $ do
+      twosAndThrees "abcdef" `shouldBe` (mempty, mempty)
+    specify "bababc contains two a and three b, so it counts for both." $ do
+      twosAndThrees "bababc" `shouldBe` (Sum 1, Sum 1)
+    specify "abbcde contains two b, but no letter appears exactly three times." $ do
+      twosAndThrees "abbcde" `shouldBe` (Sum 1, mempty)
+    specify "abcccd contains three c, but no letter appears exactly two times." $ do
+      twosAndThrees "abcccd" `shouldBe` (mempty, Sum 1)
+    specify "aabcdd contains two a and two d, but it only counts once." $ do
+      twosAndThrees "aabcdd" `shouldBe` (Sum 1, mempty)
+    specify "abcdee contains two e." $ do
+      twosAndThrees "abcdee" `shouldBe` (Sum 1, mempty)
+    specify "ababab contains three a and three b, but it only counts once." $ do
+      twosAndThrees "ababab" `shouldBe` (mempty, Sum 1)
+  describe "diffsAtPosition" $ do
+    it "knows fghij and fguij differ by one" $ do
+      diffsAtPosition "fguij" "fghij" `shouldBe` 1
+    it "knows abcde and axcye differ by two" $ do
+      diffsAtPosition "abcde" "axcye" `shouldBe` 2
+  describe "commonElemsOfboxIdsDifferingBy" $ do
+    let lines = [ "abcde"
+                , "fghij"
+                , "klmno"
+                , "pqrst"
+                , "fguij"
+                , "axcye"
+                , "wvxyz"
+                ]
+    it "can be used to find the correct answer" $ do
+      commonElemsOfboxIdsDifferingBy 1 lines `shouldBe` ["fgij"]

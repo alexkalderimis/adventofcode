@@ -1,25 +1,26 @@
-{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE OverloadedStrings #-}
 
-import qualified Text.ParserCombinators.ReadP as R
 import Control.Applicative
+import Control.Arrow (second)
 import Data.Functor
-import Data.Bool
-import Data.Ord (comparing)
 import Data.Maybe
-import Data.Coerce
-import Data.Monoid hiding ((<>))
-import Data.Semigroup
-import qualified Data.Array as A
-import           Data.Array ((//))
-import qualified Data.Map as M
-import Text.Read (readsPrec)
+import qualified Data.Text as T
+import qualified Data.Ix as Ix
+import qualified Data.Map.Strict as M
 import Text.Printf (printf)
-import qualified Data.List as L
+import qualified Data.List.Extra as L
+import qualified Data.Attoparsec.Text as A
+import           Control.Applicative.Combinators hiding (count)
+import           Text.Parser.Char (text, newline)
 
-data LogEntry = LogEntry
-  { leTimeStamp :: TimeStamp
-  , leEvent :: GuardEvent
-  } deriving (Show)
+import Test.QuickCheck (forAll, shuffle)
+
+import Elves
+import Elves.Advent
+import qualified Elves.SeqParser as SP
+
+type Minute = Int
+type SleepPeriod = (Minute, Minute)
 
 data TimeStamp = TimeStamp
   { tsYear :: Int
@@ -33,121 +34,164 @@ newtype GuardId = GuardId { unGuardId :: Int }
   deriving (Show, Eq, Ord)
 
 data GuardEvent = StartShift GuardId | FallAsleep | WakeUp
-  deriving (Show)
+  deriving (Show, Eq)
 
-parseLog :: String -> Maybe LogEntry
-parseLog = fmap fst . listToMaybe . R.readP_to_S logEntryP
+type Log = [(TimeStamp, GuardEvent)]
 
-logEntryP :: R.ReadP LogEntry
-logEntryP = LogEntry <$> timeStampP
-                     <*> (R.char ' ' >> guardEventP)
+data Shift = Shift
+  { guardId :: GuardId
+  , startTime :: TimeStamp
+  , sleepPeriods :: [SleepPeriod]
+  } deriving (Show, Eq)
 
-timeStampP :: R.ReadP TimeStamp
-timeStampP = R.char '[' *> ts <* R.char ']'
-  where
-    ts = do y <- int
-            _ <- R.char '-'
-            m <- int
-            _ <- R.char '-'
-            d <- int
-            _ <- R.char ' '
-            h <- int
-            _ <- R.char ':'
-            m' <- int
-            return (TimeStamp y m d h m')
-
-guardEventP :: R.ReadP GuardEvent
-guardEventP = R.choice [shiftStart, fallAsleep, wakeUp]
-  where shiftStart = StartShift <$> (R.string "Guard #" *> (GuardId <$> int) <* R.string " begins shift")
-        fallAsleep = FallAsleep <$ R.string "falls asleep"
-        wakeUp     = WakeUp     <$ R.string "wakes up"
-
-int :: R.ReadP Int
-int = R.readS_to_P (readsPrec 10)
-
-type Log = [LogEntry]
-type Minute = Int
-type SleepPeriod = (Minute, Minute)
-newtype SleepPattern = SleepPattern { unSleepPattern :: A.Array Minute Int } deriving (Show)
-
-sleepPatternIx :: (Minute, Minute)
-sleepPatternIx = (0,59)
-
-instance Semigroup SleepPattern where
-  (SleepPattern p0) <> (SleepPattern p1) = SleepPattern (p0 // [(i, a + b) | (i, b) <- A.assocs p1, b /= 0, let a = p0 A.! i ])
-
-instance Monoid SleepPattern where
-  mempty = mkPattern (pure 0)
-  mappend = (<>)
-
-mkPattern :: (Minute -> Int) -> SleepPattern
-mkPattern f = SleepPattern (A.listArray sleepPatternIx (fmap f $ A.range sleepPatternIx))
-
-sleepPeriods :: Log -> [SleepPeriod]
-sleepPeriods [] = []
-sleepPeriods (LogEntry{leTimeStamp = t0, leEvent = FallAsleep} : LogEntry{leTimeStamp = t1, leEvent = WakeUp} : log) = (tsMinute t0, tsMinute t1) : sleepPeriods log
-sleepPeriods (_ : log) = sleepPeriods log
-
-isAsleep :: Minute -> SleepPeriod -> Bool
-isAsleep m (start, end) = m >= start && m < end
-
-sleepPattern :: [SleepPeriod] -> SleepPattern
-sleepPattern = foldMap $ \period -> mkPattern (\m -> if isAsleep m period then 1 else 0)
-
-sleepPatterns :: Log -> M.Map GuardId SleepPattern
-sleepPatterns = M.fromListWith (<>) . fmap (fmap (sleepPattern . sleepPeriods)) . groupGuard
-  where
-    groupGuard = \case
-      [] -> []
-      (e : log) -> case leEvent e of
-        StartShift g -> let (shift, log') = guardShift log in (g, shift) : groupGuard log'
-        _            ->  error $ "event without guard on shift: " <> show e
-
-    guardShift = L.break (newShift . leEvent)
-    newShift StartShift{} = True
-    newShift _ = False
-
-totalSleep :: SleepPattern -> Int
-totalSleep = sum . A.elems . unSleepPattern
-
-sleepiestMinute :: SleepPattern -> Int
-sleepiestMinute = fst . L.maximumBy (comparing snd) . A.assocs . unSleepPattern
-
-sleepiestGuard :: M.Map GuardId SleepPattern -> (GuardId, SleepPattern)
-sleepiestGuard = L.maximumBy (comparing (totalSleep . snd)) . M.toList
-
-mostReliable :: M.Map GuardId SleepPattern -> (GuardId, SleepPattern)
-mostReliable = L.maximumBy (comparing peak) . M.toList
-  where peak = safeMax . A.elems . unSleepPattern . snd
-        safeMax [] = Nothing
-        safeMax xs = Just (maximum xs)
-   
-display :: SleepPattern -> [String]
-display p = ("Total Sleep: " <> show (totalSleep p))
-          : ("Sleepiest minute: " <> show (sleepiestMinute p))
-          : fmap displayRow (reverse [1 .. maxSleep])
-  where
-    displayRow lim = printf "%02d: " lim
-                   <> A.elems (fmap (bool '.' 'x' . (lim <=)) (unSleepPattern p))
-    maxSleep       = maximum . A.elems . unSleepPattern $ p
+type ObservedSleep = M.Map GuardId [SleepPeriod]
 
 main :: IO ()
-main = do
-  log <- L.sort . lines <$> getContents
-  -- mapM_ putStrLn log
-  let mEvents = traverse parseLog log
-  case mEvents of
-    Nothing -> error "Could not parse log"
-    Just es -> do let ps = sleepPatterns es
-                  putStrLn "SLEEPIEST"
-                  doSleepiest ps
-                  putStrLn "-------------"
-                  putStrLn "MOST RELIABLE"
-                  doMostReliable ps
+main = day 4 parser pt1 pt2 spec
   where
-    showGuard (g,p) = do
-      print g
-      mapM_ putStrLn (display p)
-      putStrLn $ "ANSWER: " <> show (unGuardId g * sleepiestMinute p)
-    doSleepiest = showGuard . sleepiestGuard
-    doMostReliable = showGuard . mostReliable
+    pt1 obs = do
+      let (gid, ps) = sleepiestGuard obs
+          (m, n) = sleepiestMinute ps
+      printf "Guard #%d: asleep for %d minutes\n" (unGuardId gid) (totalSleep ps)
+      printf "Sleepiest minute: %d (%d times)\n" m n
+      solution gid m
+
+    pt2 obs = do
+      let (gid, (m, n)) = mostPredicatableSleeper obs
+      printf "Guard #%d: asleep at minute %d on %d occasions\n" (unGuardId gid) m n
+      solution gid m
+
+    parser = guardLogP >>= either fail (pure . observeShifts) . buildShifts
+
+    solution :: GuardId -> Minute -> IO ()
+    solution gid m = printf "gid * min = %d\n" (unGuardId gid * m)
+
+-- two pass-parsing (tokens->log) to deal with the sort-order without
+-- doing backtracking in Attoparsec
+guardLogP :: Parser Log
+guardLogP = logLineP `sepBy1` newline
+  where
+    logLineP = do
+      ts <- timeStampP
+      text " "
+      event <- eventP
+      pure (ts, event)
+
+buildShifts :: Log -> Either String [Shift]
+buildShifts = SP.parseOnly (some p) . L.sortOn fst
+  where
+    p = do
+      (ts, StartShift gid) <- SP.token
+      ps <- many sleepPeriodP
+      pure (Shift gid ts ps)
+    sleepPeriodP = do
+      (t0, FallAsleep) <- SP.token
+      (t1, WakeUp) <- SP.token
+      pure (tsMinute t0, tsMinute t1 - 1)
+
+observeShifts :: [Shift] -> ObservedSleep
+observeShifts = L.foldl' f M.empty
+  where
+    f m shift | null (sleepPeriods shift) = m
+    f m shift = M.alter (g (sleepPeriods shift)) (guardId shift) m
+
+    g ps Nothing = pure ps
+    g ps (Just ps') = pure (ps <> ps')
+
+timeStampP :: Parser TimeStamp
+timeStampP = text "[" *> ts <* text "]"
+  where
+    ts = do
+      [y,m,d] <- A.decimal `sepBy` text "-"
+      text " "
+      [hrs,min] <- A.decimal `sepBy` text ":"
+
+      pure (TimeStamp y m d hrs min)
+
+eventP :: Parser GuardEvent
+eventP = choice [ startShift, fallAsleep, wakeUp ]
+  where
+    startShift = do
+      gid <- text "Guard #" *> (GuardId <$> A.decimal) <* text " begins shift"
+      pure (StartShift gid)
+    fallAsleep = FallAsleep <$ text "falls asleep"
+    wakeUp = WakeUp <$ text "wakes up"
+
+sleepiestMinute :: [SleepPeriod] -> (Minute, Int)
+sleepiestMinute ps = L.maximumOn snd $ fmap (\m -> (m, count (`Ix.inRange` m) ps)) [0..59]
+
+sleepiestGuard :: ObservedSleep -> (GuardId, [SleepPeriod])
+sleepiestGuard = L.maximumOn (totalSleep . snd) . M.toList
+
+mostPredicatableSleeper :: ObservedSleep -> (GuardId, (Minute, Int))
+mostPredicatableSleeper = L.maximumOn (snd . snd) . M.toList . M.map sleepiestMinute
+
+totalSleep :: [SleepPeriod] -> Int
+totalSleep = sum . fmap Ix.rangeSize
+
+spec = do
+  let parse = buildShifts <=< parseOnly guardLogP 
+  let example = ["[1518-11-01 00:00] Guard #10 begins shift"
+                ,"[1518-11-01 00:05] falls asleep"
+                ,"[1518-11-01 00:25] wakes up"
+                ,"[1518-11-01 00:30] falls asleep"
+                ,"[1518-11-01 00:55] wakes up"
+                ,"[1518-11-01 23:58] Guard #99 begins shift"
+                ,"[1518-11-02 00:40] falls asleep"
+                ,"[1518-11-02 00:50] wakes up"
+                ,"[1518-11-03 00:05] Guard #10 begins shift"
+                ,"[1518-11-03 00:24] falls asleep"
+                ,"[1518-11-03 00:29] wakes up"
+                ,"[1518-11-04 00:02] Guard #99 begins shift"
+                ,"[1518-11-04 00:36] falls asleep"
+                ,"[1518-11-04 00:46] wakes up"
+                ,"[1518-11-05 00:03] Guard #99 begins shift"
+                ,"[1518-11-05 00:45] falls asleep"
+                ,"[1518-11-05 00:55] wakes up"
+                ]
+
+  describe "parsing" $ do
+    let expected = [ Shift (GuardId 10)
+                           (TimeStamp 1518 11 1 0 0)
+                           [(5,24),(30,54)]
+                   , Shift (GuardId 99)
+                           (TimeStamp 1518 11 1 23 58)
+                           [(40,49)]
+                   , Shift (GuardId 10)
+                           (TimeStamp 1518 11 3 0 5)
+                           [(24,28)]
+                   , Shift (GuardId 99)
+                           (TimeStamp 1518 11 4 0 2)
+                           [(36,45)]
+                   , Shift (GuardId 99)
+                           (TimeStamp 1518 11 5 0 3)
+                           [(45,54)]
+                   ]
+                           
+    specify "we can parse the log" $ do
+      forAll (shuffle example) $ \lines -> do
+        L.sort lines `shouldBe` example
+        parse (T.unlines lines) `shouldBe` Right expected
+
+  describe "pt1" $ do
+    let shouldSolveCorrectly lines = do
+          let (Right log) = parse (T.unlines lines)
+              obs = observeShifts log
+              (gid, ps) = sleepiestGuard obs
+
+          gid `shouldBe` GuardId 10
+          totalSleep ps `shouldBe` 50
+          sleepiestMinute ps `shouldBe` (24, 2)
+
+    specify "we can find the sleepiest guard" (shouldSolveCorrectly example)
+
+    specify "we can find the sleepiest guard, no matter the input order" $
+      forAll (shuffle example) shouldSolveCorrectly
+
+  describe "mostPredicatableSleeper" $ do
+    specify "we can find the most predicatable sleeper, no matter the input order" $
+      forAll (shuffle example) $ \lines -> do
+        let (Right log) = parse (T.unlines lines)
+            obs = observeShifts log
+
+        mostPredicatableSleeper obs `shouldBe` (GuardId 99, (45, 3))

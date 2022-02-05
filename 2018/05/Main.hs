@@ -1,18 +1,23 @@
 import Data.Char
 
+import qualified Data.Attoparsec.Text as A
+import qualified Data.Text as T
+
+import Elves.Advent
+
 main :: IO ()
-main = do
-  s <- getLine
-  putStrLn "React of original"
-  print . length $ react s
-  let optimised = do
-       c <- ['a' .. 'z']
-       let candidate = filter (\c' -> c /= c' && toUpper c /= c') s
-       let len = length (react candidate)
-       return (c, len)
-  putStrLn "Optimised length"
-  mapM_ print optimised
-  putStrLn . ("Minimum: " ++) . show . minimum . fmap snd $ optimised
+main = day 5 (T.unpack <$> A.takeText) pt1 pt2 spec
+  where
+    pt1 = print . rl
+    pt2 s = do
+      let optimised = do
+           c <- ['a' .. 'z']
+           let candidate = filter (`notElem` [c, toUpper c]) s
+           return (c, rl candidate)
+      putStrLn . ("Minimum: " ++) . show . minimum . fmap snd $ optimised
+
+    spec = pure ()
+    rl = length . react
 
 -- react the string by collapsing sequences of 'reactive' characters (defined
 -- as characters of same letter by opposite case). We traverse the string
@@ -26,4 +31,4 @@ react = go []
         go past (c:cs)   = go (c:past) cs
 
 reactive :: Char -> Char -> Bool
-reactive a b = (a /= b) && (toUpper a == b || toUpper b == a)
+reactive a b = a /= b && toUpper a == toUpper b

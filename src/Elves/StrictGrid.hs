@@ -44,12 +44,12 @@ nextCoords includeDiagonals bs (Coord r c) =
                   , Coord r (pred c)
                   , Coord r (succ c)
                   ]
-      diagnonals = [ Coord (pred r) (pred c)
+      diagonals = [ Coord (pred r) (pred c)
                    , Coord (pred r) (succ c)
                    , Coord (succ r) (pred c)
                    , Coord (succ r) (succ c)
                    ]
-   in filter (Array.inRange bs) $ mconcat [straights, if includeDiagonals then diagnonals else []]
+   in filter (Array.inRange bs) $ mconcat [straights, if includeDiagonals then diagonals else []]
 
 draw :: IArray a Char => a Coordinate Char -> String
 draw grid = let (lb, ub) = Array.bounds grid

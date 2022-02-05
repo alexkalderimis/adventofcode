@@ -182,28 +182,28 @@ querySpec = describe "query" $ do
       let t = fromPoints (e : elems)
        in (first dbl e) `elem` query Within (expandQuery 3 $ (fst e, fst e)) (t :: Dim3Set)
     it "can find the midpoint in this line" $ do
-      let p k = singleton (dbl k) ()
-          t = region $ NE.fromList [p (0,0,0,0), p (0,4,0,0), p (0,-4,0,0)]
-      query Within ((-3,-3,-3,-3),(3,3,3,3)) t `shouldSatisfy` elem (dbl (0,0,0,0), ())
+      let origin :: (Int, Int, Int, Int)
+          origin = (0, 0, 0, 0)
+          p k = singleton (dbl k) ()
+          t = region $ NE.fromList [p origin, p (0,4,0,0), p (0,-4,0,0)]
+      query Within ((-3,-3,-3,-3),(3,3,3,3)) t `shouldSatisfy` elem (dbl origin, ())
 
 lookupSpec = describe "lookup" $ do
   let oneDB = (cast :: Cast (RTree Int Bool))
-      to n = QC.within (max n 1 * 2000)
 
   specify "We can find anything present in the tree" $ property $ \(Cube bs) x t ->
-    to (size t) $
     lookup bs (singleton bs x `union` t) === Just (x :: Word)
 
   specify "We cannot find anything not present in the tree" $ property $ \(Cube bs) xs ->
     let t = RT.fromList (filter ((/= bs) . fst) xs)
-     in to (size t) $ lookup bs t === (Nothing :: Maybe Word)
+     in lookup bs t === (Nothing :: Maybe Word)
 
   specify "lookup q t === L.lookup q (assocs t)" $
-    property $ \(ValidBounds q) t -> to (size t) $
+    property $ \(ValidBounds q) t ->
       lookup q (oneDB t) === L.lookup q (assocs t)
 
   specify "lookup q (a `union` b) == if q `member` a then lookup q a else lookup q b"
-    $ property $ \(ValidBounds q) a b -> to (size a + size b) $
+    $ property $ \(ValidBounds q) a b ->
         let r = lookup q (a `union` b)
          in if RT.member q (oneDB a)
                then r === lookup q a
@@ -255,8 +255,8 @@ nearestNeighbourKSpec = describe "nearestNeighbourK" $ do
 
   specify "counter-example-1" $ do
     let h = Manhattan
-        k = 4
-        p = (-3,0,-2)
+        k = 4 :: Int
+        p = (-3,0,-2) :: Dim3
         t = RT.fromList [(((-7,5,1),(0,12,14)), 'A')
                         ,(((-5,-1,-7),(-5,-1,-7)),'B')
                         ]
@@ -294,7 +294,8 @@ insertSpec = describe "insert" $ do
         size (a `union` b :: RTree Int Bool) === 4
 
     specify "nested-objects" $ QC.within 1000 $ do
-      size (insertPoint (0,0,0) () $ insert ((-10,-10,-10),(10,10,10)) () RT.empty) `shouldBe` 2
+      let p = (0,0,0) :: Dim3
+      size (insertPoint p () $ insert ((-10,-10,-10),(10,10,10)) () RT.empty) `shouldBe` 2
 
     -- 000000000011111111112
     -- 012345678901234567890
@@ -325,7 +326,7 @@ insertSpec = describe "insert" $ do
         which "overlaps d" (`shouldSatisfy` overlapping d)
         which "overlaps e" (`shouldSatisfy` overlapping e)
       describe "the concatenation of these trees" $ do
-        let t = mconcat [a,b,c,d,e,f]
+        let t = mconcat [a,b,c,d,e,f] :: RTree Dim2 String
         it "has six elements" . property $ do
           size t `shouldBe` 6
         it "is two layers deep" $ do
@@ -394,7 +395,7 @@ insertSpec = describe "insert" $ do
                     ,(((58,54,28),(90,95,55)),       'γ')
                     ]
       let t = RT.fromList objects
-          p = origin
+          p = origin :: Dim3
 
       length (query Precisely (p,p) t) `shouldBe` 0
       fmap snd (query Overlapping (p,p) t) `shouldMatchList` "DLY"
@@ -501,13 +502,15 @@ insertWithSpec = describe "insertWith" $ do
     lookup bs t `shouldBe` Just True
 
   specify "we can choose new values" $ do
-    let bs = dbl (5,5)
+    let bs = dbl ((5,5) :: Dim2)
         t = insertWith (\new old -> new) bs False trues
 
     lookup bs t `shouldBe` Just False
 
   specify "it can operate as counting structure" $ property $ do
-    let t = fromPointsWith (+) $ flip zip (repeat 1)
+    let points :: [(Int, Int, Int)] -> [(Int, Int, Int)]
+        points = id
+        t = fromPointsWith (+) $ flip zip (repeat 1) $ points
                  [(0,0,0),(0,0,1),(0,1,0),(1,2,1)
                  ,(0,0,0),(0,0,1),(0,1,0)
                          ,(0,0,1),(0,1,0)

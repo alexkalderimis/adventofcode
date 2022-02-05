@@ -3,7 +3,6 @@
 import           Control.Arrow           ((&&&))
 import Control.Lens.Combinators (none)
 import           Control.Monad           (guard)
-import qualified Data.Array              as A
 import           Data.Attoparsec.Text    (decimal, space)
 import           Data.Ix
 import qualified Data.List               as L
@@ -28,12 +27,7 @@ import           Elves.Coord             (Bounds, overlaps)
 import           Elves.RTree             (QueryStrategy (..), RTree, delete, popQuery)
 import qualified Elves.RTree             as RT
 
-import Debug.Trace
-
-data Lit = On | Off deriving (Show, Eq)
-
-data Command = Turn Lit | Toggle
-  deriving (Show, Eq)
+data Command = On | Off | Toggle deriving (Show, Eq)
 
 type Commands = [(Bounds Location, Command)]
 type HouseLights = RTree Location Int
@@ -63,8 +57,8 @@ parser = commandP `sepBy1` newline
   where
     location = (decimal <* ",") <#> decimal
     commandP = do
-      cmd <- choice [Turn On <$ "turn on"
-                    ,Turn Off <$ "turn off"
+      cmd <- choice [On <$ "turn on"
+                    ,Off <$ "turn off"
                     ,Toggle <$ "toggle"
                     ]
       space
@@ -79,29 +73,29 @@ test = do
     let mr = parseOnly parser exampleInput
     it "evaluates correctly" $ do
       let expected = (1000 * 1000) - 1000 - 4
-      fmap countLit mr `shouldBe` Right expected
+      fmap (brightnessOf . countLit) mr `shouldBe` Right expected
 
   describe "pt2" $ do
     let mr = parseOnly parser exampleInput
     it "evaluates correctly" $ do
       let expected = (1000 * 1000) + 2000 - 4
-      fmap getBrightness mr `shouldBe` Right expected
+      fmap (brightnessOf . getBrightness) mr `shouldBe` Right expected
 
   describe "collisions" $ do
     let bs = ((1,1),(10,10))
         cs = [(bs, Toggle)
-             ,(((5,5),(5,5)), Turn Off)
-             ,(bs, Turn On)
+             ,(((5,5),(5,5)), Off)
+             ,(bs, On)
              ,(bs, Toggle)
              ]
     describe "pt1" $ do
       let expected = 100 - 100
       it "calculates correctly" $ do
-        countLit cs `shouldBe` expected
+        brightnessOf (countLit cs) `shouldBe` expected
     describe "pt2" $ do
       let expected = (99 * (2 + 1 + 2)) + (1 * (2 - 1 + 1 + 2))
       it "calculates correctly" $ do
-        getBrightness cs `shouldBe` expected
+        brightnessOf (getBrightness cs) `shouldBe` expected
 
 exampleInput = T.unlines
   ["turn on 0,0 through 999,999"
@@ -110,25 +104,32 @@ exampleInput = T.unlines
   ]
 
 applyCommands :: (Command -> Int -> Int) -> Commands -> HouseLights
-applyCommands value = L.foldl' go mempty
+applyCommands value = L.foldl' go RT.empty
   where
     go :: HouseLights -> (Bounds Location, Command) -> HouseLights
-    go t (bs, cmd) = traceShow ("Applying command", bs, cmd) $
+    go t (bs, cmd) =
       let (regions, t') = popQuery Overlapping bs t
        in case regions of
-            [] -> RT.insert bs (value cmd 0) t'
+            [] -> case value cmd 0 of
+                    0 -> t'
+                    v -> RT.insert bs v t'
             _  -> let (intersections, rest) = fmap concat
                                            . unzip
                                            . fmap (applyOverlay value bs cmd)
                                            $ regions
 
+                      -- tiles that represent affected regions of blank state
                       fillers = [(k, value cmd 0) | k <- compactify (tiles bs (fst <$> intersections))]
-                      newRegions = intersections <> rest <> fillers
-                  in traceShow ("Inserting " <> show (length newRegions) <> " new regions. " <>
-                                show (length intersections) <> " intersections, " <>
-                                show (length rest) <> " existing, " <>
-                                show (length fillers) <> " fillers.")
-                     $ L.foldl' (\t (k,v) -> RT.insert k v t) t' newRegions
+                      -- we never want to insert zeroes into the tree - since a block of zeroes
+                      -- is the same as the empty state.
+                      newRegions = RT.fromList $ filter ((> 0) . snd) (intersections <> rest <> fillers)
+                  -- we know that there are no conflicts/overlaps between items,
+                  -- so for speed we create a new region each time. This means
+                  -- the tree gets (pessimitically) as deep as the list of commands,
+                  -- but we save on insertion speed, which is essentially O(1).
+                  -- In reality, depth stabilizes at a much lower figure (about 30-50),
+                  -- as we pop regions on each step.
+                  in RT.region (pure newRegions <> pure t')
 
 brightnessOf :: HouseLights -> Int
 brightnessOf = getSum . foldMap (Sum . luminosity) . RT.indexed
@@ -140,26 +141,26 @@ luminosity (bs, n) = rangeSize bs * n
 -- along with all the section of that region that the command does not apply to.
 applyOverlay :: (Command -> Int -> Int) -> Bounds Location -> Command
              -> LightRegion -> (LightRegion, [LightRegion])
-applyOverlay value bs cmd (bs', n) =
+applyOverlay value bs cmd (bs', curr) =
   let intersection = trim bs bs'
-      split = [(bs, n) | bs <- compactify (neighbours bs' intersection)]
-      applied = (intersection, value cmd n)
+      split = [(bs, curr) | bs <- compactify (neighbours bs' intersection)]
+      applied = (intersection, value cmd curr)
    in (applied, split)
 
 countLit :: Commands -> HouseLights
 countLit = applyCommands value
   where
-    value Toggle 0     = 1
-    value Toggle 1     = 0
-    value (Turn On) _  = 1
-    value (Turn Off) _ = 0
+    value Toggle 0 = 1
+    value Toggle 1 = 0
+    value On     _ = 1
+    value Off    _ = 0
 
 getBrightness :: Commands -> HouseLights
 getBrightness = applyCommands value
   where
-    value Toggle     n = n + 2
-    value (Turn On)  n = n + 1
-    value (Turn Off) n = max 0 (n - 1)
+    value Toggle n = n + 2
+    value On     n = n + 1
+    value Off    n = n - 1
 
 cmd :: (Bounds Location, Command) -> Command
 cmd = snd

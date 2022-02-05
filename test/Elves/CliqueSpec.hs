@@ -34,7 +34,7 @@ isLand = is 'x'
 is c ix = A.inRange (A.bounds islands) ix && islands A.! ix == c
 
 spec :: Spec
-spec = describe "Test.Clique" $ do
+spec = describe "Elves.Clique" $ do
   let sg = searchGraph neighbours
       allSquares = A.range (A.bounds islands)
       landFall = filter isLand allSquares
@@ -45,14 +45,27 @@ spec = describe "Test.Clique" $ do
       numberOfCliques (sg allSquares) `shouldSatisfy` (< length allSquares)
     it "knows the number of islands, provided we start on land" $ do
       numberOfCliques (sg landFall) `shouldBe` 6
+    it "is the same as length cliques" $ do
+      let g = sg landFall
+      numberOfCliques g `shouldBe` length (cliques g)
     it "knows the number of bodies of water, provided we start on water" $ do
       numberOfCliques (sg seaFall) `shouldBe` 3
     it "knows that all all = land + sea" $ do
       numberOfCliques (sg allSquares) `shouldBe` (numberOfCliques (sg landFall) + numberOfCliques (sg seaFall))
 
+  describe "cliques" $ do
+    specify "unions cliques === allSquares" $ do
+      let g = sg allSquares
+      foldl1 (<>) (cliques g) `shouldBe` clique (head $ searchGraph (const allSquares) allSquares)
+    it "knows that all = land <> sea" $ do
+      cliques (sg allSquares) `shouldMatchList` (cliques (sg landFall) <> cliques (sg seaFall))
+    specify "no square is in more than one clique" $
+      forAll (elements allSquares) $ \e -> do
+        let cs = cliques (sg allSquares)
+        filter (`member` e) cs `shouldSatisfy` ((== 1) . length)
+
   describe "clique" $ do
     it "knows the size of the island beginning at (0,8)" $ do
-      S.size (clique . head $ sg [(0,8)]) `shouldBe` 18
+      length (clique . head $ sg [(0,8)]) `shouldBe` 18
     it "knows the size of the island beginning at (0,4)" $ do
-      S.size (clique . head $ sg [(0,4)]) `shouldBe` 5
-
+      length (clique . head $ sg [(0,4)]) `shouldBe` 5

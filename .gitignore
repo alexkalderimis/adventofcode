@@ -13,3 +13,4 @@ build/
 *.hp
 *.aux
 *.ps
+.last-debug-lib-build

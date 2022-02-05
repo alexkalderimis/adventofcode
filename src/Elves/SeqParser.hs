@@ -2,6 +2,7 @@
 
 module Elves.SeqParser where
 
+import Control.Arrow (left)
 import Control.Applicative
 import Data.Sequence (Seq(Empty, (:<|)))
 import qualified Data.Sequence as Seq
@@ -50,6 +51,9 @@ eos = SeqParser $ \ts -> case ts of Empty   -> (ts, Right ())
 
 parse :: SeqParser t a -> Seq t -> Either (ParseError t) a
 parse p = snd . runSeqParser p
+
+parseOnly :: Show t => SeqParser t a -> [t] -> Either String a
+parseOnly p = left show . parse (p <* eos) . Seq.fromList
 
 embed :: Either (ParseError t) a -> SeqParser t a
 embed result = SeqParser $ \ts -> (ts, result)

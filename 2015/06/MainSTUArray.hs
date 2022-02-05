@@ -1,4 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE FlexibleContexts #-}
+
+module Main (main) where
 
 import           Data.Attoparsec.Text    (decimal, space)
 import           Data.Monoid
@@ -6,37 +10,41 @@ import qualified Data.Text               as T
 import qualified Data.List               as L
 import           Text.Parser.Char        (newline, text)
 import           Text.Parser.Combinators (choice, sepBy1)
-import           Data.Array.Unboxed      (UArray, (//), (!))
-import qualified Data.Array.Unboxed      as A
+import           Data.Array.ST (STUArray, runSTUArray, newArray, writeArray, readArray)
+import qualified Data.Array.Unboxed as A
+import           Control.Monad.ST
 
 import           Elves
 import           Elves.Advent
 import           Elves.StrictGrid        (Coordinate(..), Row(..), Col(..))
-import           Elves.Coord             (Bounds)
+import           Elves.Coord             (Bounds, expandB)
 
 data Command = On | Off | Toggle deriving (Show, Eq)
 
 type Region = Bounds Coordinate
 type Commands = [(Region, Command)]
 
-type HouseLights = UArray Coordinate Int
+type HouseLights = A.UArray Coordinate Int
 
--- Reference implementation against an immutable unboxed array
+-- Reference implementation against a mutable unboxed array
 --
--- pt1 and pt2 follow the identical algorithm, and take about 800ms
+-- pt1 and pt2 follow the identical algorithm, and take about 500ms
 --
--- This really hammers home how vastly superior as a starting point
--- arrays are for most things - this is slower than the optimized
--- RTree based pt1 (by quite a bit!), but is consistent over both
--- parts, and much shorter clearer code.
+-- Messier than using immutable arrays, and requires explicit foralls,
+-- and lazy passing of reads to avoid a space leak, but not that much
+-- messier for a significant (2x) speedup.
+-- 
+-- Note that using an unboxed array is very important here. Using a boxed
+-- array results in run times on the order of 900ms (pt1, i.e. 2x) and
+-- 1200ms (pt2, i.e. 3x).
 main :: IO ()
 main = day 6 parser pt1 pt2 test
   where
     pt1 = print . luminosity . countLit
     pt2 = print . luminosity . getBrightness
 
-houseBounds :: Region
-houseBounds = (Coord 0 0, Coord 999 999)
+houseBounds :: Commands -> Region
+houseBounds = L.foldl1 expandB . fmap fst
 
 -- turn off 199,133 through 461,193
 -- toggle 322,558 through 977,958
@@ -95,26 +103,27 @@ exampleInput = T.unlines
 luminosity :: HouseLights -> Int
 luminosity = sum . A.elems
 
-unlitHouse :: HouseLights
-unlitHouse = A.listArray houseBounds (repeat 0)
-
 {-# INLINE lightHouse #-}
-lightHouse :: (HouseLights -> Region -> Command -> [(Coordinate, Int)]) -> Commands -> HouseLights
-lightHouse changes = L.foldl' go unlitHouse
+lightHouse :: (forall s. Command -> ST s Int -> ST s Int) -> Commands -> HouseLights
+lightHouse f cmds = runSTUArray $ do
+  house <- newArray (houseBounds cmds) 0
+  mapM_ (update house) operations
+  pure house
   where
-    go h (bs, cmd) = h // changes h bs cmd
+    update a (i, cmd) = f cmd (readArray a i) >>= writeArray a i
+    operations        = cmds >>= \(bs, cmd) -> zip (A.range bs) (repeat cmd)
 
 countLit :: Commands -> HouseLights
 countLit = lightHouse changes
   where
-    changes _ bs Off    = [ (k, 0) | k <- A.range bs ]
-    changes _ bs On     = [ (k, 1) | k <- A.range bs ]
-    changes h bs Toggle = [ (k, 1 - (h ! k)) | k <- A.range bs ]
+    changes Off    = const (pure 0)
+    changes On     = const (pure 1)
+    changes Toggle = fmap (1 -)
 
 getBrightness :: Commands -> HouseLights
 getBrightness = lightHouse changes
   where
-    changes h bs cmd = [ (k, adjust cmd (h ! k)) | k <- A.range bs ]
+    changes cmd = fmap (adjust cmd)
 
     adjust Off    = max 0 . subtract 1
     adjust On     = (+ 1)

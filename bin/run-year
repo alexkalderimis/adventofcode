@@ -2,19 +2,27 @@
 
 set -e
 
+if test -z "$YEAR"; then
+  YEAR="$1"
+fi
+if test -z "$YEAR"; then
+  >&2 echo "No year set"
+  exit 1
+fi
+
+echo "Running all puzzles for $YEAR"
+
 ./bin/build-year
 
 for day in ./"$YEAR"/* ; do
-  if test -f $day/Main.hs; then
+  for src in $day/Main*.hs; do
     echo
     echo "================="
-    echo $day
+    echo $src
     echo "================="
 
-    stack run $YEAR $(basename $day) test
-    echo
-    stack run $YEAR $(basename $day) pt1
-    echo
-    stack run $YEAR $(basename $day) pt2
-  fi
+    variant=$(echo -n $src | sed 's/.*Main//' | sed 's/\.hs//')
+
+    stack run $YEAR $(basename $day) all -- --variant "$variant"
+  done
 done

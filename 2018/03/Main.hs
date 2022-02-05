@@ -1,10 +1,18 @@
-import qualified Text.ParserCombinators.ReadP as R
+{-# LANGUAGE OverloadedStrings #-}
+
+module Main (main) where
+
+import qualified Data.Ix as Ix
+import qualified Data.Attoparsec.Text as A
 import Control.Applicative
-import Text.Read (readsPrec)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
-import Data.Monoid
 import Data.Maybe
+import           Control.Applicative.Combinators
+import           Text.Parser.Char (text, newline)
+
+import Elves hiding (example)
+import Elves.Advent hiding (example)
 
 data Claim = Claim { claimId :: ClaimId
                    , claimOffset :: Offset
@@ -13,46 +21,57 @@ data Claim = Claim { claimId :: ClaimId
 
 newtype ClaimId = ClaimId { unclaimId :: Int } deriving (Show, Eq, Ord)
 
+type OverlappedClaims = M.Map SquareInch (S.Set ClaimId)
+
 data Offset = Offset { offsetX :: Int, offsetY :: Int } deriving Show
 data Size = Size { sizeWidth :: Int, sizeHeight :: Int } deriving Show
 
 type SquareInch = (Int,Int)
 
-parseClaim :: String -> Maybe Claim
-parseClaim = fmap fst . listToMaybe . R.readP_to_S claimP
+main :: IO ()
+main = day 2 parser pt1 pt2 spec
+  where
+    parser = claimP `sepBy1` newline
+    pt1 = print . overlappingArea . overlapAllClaims
+    pt2 = mapM_ print . uncontestedClaims . overlapAllClaims
+    spec = specify "we have the correct solution for the example" $ do
+             example `shouldBe` Right (4, S.singleton (ClaimId 3))
 
 -- Parse claims, of the form:
 -- #1 @ 1,3: 4x4
 -- #2 @ 3,1: 4x4
 -- #3 @ 5,5: 2x2
-claimP :: R.ReadP Claim
+claimP :: Parser Claim
 claimP = Claim <$> claimIdP
-               <*> (R.string " @ " >> offsetP)
-               <*> (R.string ": " >> sizeP)
+               <*> (text " @ " >> offsetP)
+               <*> (text ": " >> sizeP)
 
-claimIdP :: R.ReadP ClaimId
-claimIdP = R.char '#' >> (ClaimId <$> int)
+claimIdP :: Parser ClaimId
+claimIdP = ClaimId <$> (text "#" >> int)
 
-offsetP :: R.ReadP Offset
-offsetP = Offset <$> int <*> (R.char ',' >> int)
+offsetP :: Parser Offset
+offsetP = Offset <$> int <*> (text "," >> int)
 
-sizeP :: R.ReadP Size
-sizeP = Size <$> int <*> (R.char 'x' >> int)
+sizeP :: Parser Size
+sizeP = Size <$> int <*> (text "x" >> int)
 
-int :: R.ReadP Int
-int = R.readS_to_P (readsPrec 10)
+int :: Parser Int
+int = A.decimal
 
-squareInches :: Claim -> [SquareInch]
-squareInches claim = [ (x + dx, y + dy) | x <- [0 .. w claim]
-                                        , y <- [0 .. h claim]
+claimedInches :: Claim -> [SquareInch]
+claimedInches = Ix.range . claimedRange
 
-                     ]
+claimedRange :: Claim -> (SquareInch, SquareInch)
+claimedRange claim = (lb, ub)
   where
-    w = subtract 1 . sizeWidth . claimSize
-    h = subtract 1 . sizeHeight . claimSize
-    Offset dx dy = claimOffset claim
+    lb = (x, y)
+    ub = (x + dx claim, y + dy claim)
+    dx = subtract 1 . sizeWidth . claimSize
+    dy = subtract 1 . sizeHeight . claimSize
+    Offset x y = claimOffset claim
 
-type OverlappedClaims = M.Map SquareInch (S.Set ClaimId)
+overlappingArea :: OverlappedClaims -> Int
+overlappingArea = S.size . overlaps
 
 overlaps :: OverlappedClaims -> S.Set SquareInch
 overlaps = M.keysSet . M.filter ((> 1) . S.size)
@@ -66,26 +85,14 @@ overlapAllClaims :: [Claim] -> OverlappedClaims
 overlapAllClaims = M.unionsWith (<>) . fmap coverage
   where coverage claim = M.fromSet (pure . S.singleton $ claimId claim)
                        . S.fromList
-                       $ squareInches claim
+                       $ claimedInches claim
 
-example :: Maybe (S.Set SquareInch, S.Set ClaimId)
+example :: Either String (Int, S.Set ClaimId)
 example = do
-  claims <- traverse parseClaim ["#1 @ 1,3: 4x4"
-                                ,"#2 @ 3,1: 4x4"
-                                ,"#3 @ 5,5: 2x2"
-                                ]
+  claims <- traverse (parseOnly claimP) ["#1 @ 1,3: 4x4"
+                                        ,"#2 @ 3,1: 4x4"
+                                        ,"#3 @ 5,5: 2x2"
+                                        ]
   let allClaims = overlapAllClaims claims
-  return (overlaps allClaims, uncontestedClaims allClaims)
-
-main :: IO ()
-main = do
-  inputs <- lines <$> getContents
-  let claims = traverse parseClaim inputs
-  case claims of
-    Nothing -> error "Could not read claims"
-    Just cs -> do let allClaims = overlapAllClaims cs
-                  putStrLn $ "no. of overlaps: " <> (show . S.size $ overlaps allClaims)
-                  putStrLn "Uncontested claims:"
-                  putStrLn "------------------"
-                  mapM_ print (uncontestedClaims allClaims)
+  return (overlappingArea allClaims, uncontestedClaims allClaims)
 

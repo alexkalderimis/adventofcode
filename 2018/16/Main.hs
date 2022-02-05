@@ -202,7 +202,7 @@ solve ss =
                     in go good' maybes'
     removeFound m k = M.map (S.delete k) m
 
-runProgramme :: [ByteCodeInstr Instruction] -> (Maybe Memory)
+runProgramme :: [ByteCodeInstr Instruction] -> Maybe Memory
 runProgramme = foldl' go (Just (0,0,0,0))
   where
     go mm bc = mm >>= \m -> eval (opCode bc) m (args bc)

@@ -2,7 +2,7 @@
 
 import           Control.Arrow           (second)
 import           Data.Attoparsec.Text    (decimal, space)
-import           Data.Ix                 (rangeSize)
+import           Data.Ix                 (range, rangeSize)
 import qualified Data.List               as L
 import qualified Data.List.NonEmpty      as NE
 import Data.List.NonEmpty (NonEmpty)
@@ -44,13 +44,13 @@ type CommandList = [(Bounds Location, Command)]
 -- on or off, regardless of what happened to it previously. So we
 -- go through the commands in reverse, and when we find a command
 -- that is final, we can ignore all commands the overlap with it.
--- pt1 takes about 200ms
+-- pt1 takes about 200ms, vs 16s for Naive
 --
 -- For pt2 we cannot ignore any commands, so have to go through all of them.
 -- We go through them from the bottom up (from the first applied command to
 -- the last), and represent each area with an (Endo Int) modelling the
 -- transformations applied to it.
--- pt2 takes about 65s
+-- pt2 takes about 32s, which is 2x slower than Naive
 main :: IO ()
 main = day 6 parser pt1 pt2 test
   where
@@ -133,18 +133,21 @@ countLit cs = go (NE.reverse <$> cs) (RT.bounds' cs)
 -- use an Endo Int to model the transformations along a path
 -- throught the overlays.
 getBrightness :: Commands -> Int
-getBrightness t = go (Endo id) t (RT.bounds' t)
+getBrightness t = go mempty t (RT.bounds' t)
   where
-    adjust a b = max 0 (a + b)
+    -- illuminate :: Location -> Int
+    -- illuminate c = L.foldl' (flip (adjust . snd)) 0 $ L.sortOn fst (RT.overlaps (c,c) t >>= cmds)
+    -- cmds (_, cmds) = NE.toList cmds
+
+    adjust :: Command -> Int -> Int
+    adjust Toggle    = (+ 2)
+    adjust (Turn On) = (+ 1)
+    adjust (Turn Off) = max 0 . subtract 1
 
     go endo cs bs = case bottomMost cs bs of
-      Nothing -> fromIntegral (rangeSize bs) * appEndo endo 0
+      Nothing -> rangeSize bs * appEndo endo 0
       Just ((bs', cmd), cs') ->
-        let delta = case cmd of
-                     Turn Off -> (-1)
-                     Turn On  -> 1
-                     Toggle   -> 2
-            endo' = Endo (adjust delta) <> endo
+        let endo' = Endo (adjust cmd) <> endo
             ns = neighbours bs bs'
          in sum (go endo' cs' bs' : fmap (go endo cs') ns)
 

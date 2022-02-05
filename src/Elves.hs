@@ -1,3 +1,5 @@
+{-# LANGUAGE BangPatterns #-}
+
 module Elves (
   pairs,
   getMatrix,
@@ -6,17 +8,19 @@ module Elves (
   minmax,
   locally,
   boundedSearch,
-  applyN,
-  applyNM,
+  applyN, applyNWithCycleDetection, applyNM, applyNMWithCycleDetectionBy,
   cyclePred,
   cycleSucc,
-  best, median,
+  best, lowest, median,
   bestTree,
+  count,
   namedExamples,
   testing,
   consider, which,
   interleave,
   unterleave,
+  withNext,
+  fmapToSnd,
   collapseForest,
   atMost, atLeast,
   on2,
@@ -32,13 +36,14 @@ import Control.Monad.State.Class
 import Control.Applicative as X
 import Control.Monad as X
 import Control.Monad.Reader
-import Data.List as L
+import Data.List.Extra as L
 import Data.Maybe as X
 import Data.Monoid as X
 import Data.Ord as X
 import Data.Tree (Forest,Tree(..))
 import Data.Bool
 import qualified Data.Text as Text
+import qualified Data.Map.Strict     as M
 import Data.Text (Text)
 import Test.Hspec as X
 import Test.Hspec.Core.Spec (SpecM)
@@ -69,8 +74,41 @@ minmax = foldl' (\mp x -> fmap (cmp x) mp <|> Just (x,x)) Nothing
 applyN :: Int -> (a -> a) -> a -> a
 applyN n f = foldl' (.) id (replicate n f)
 
+-- like applyN, but detects cycles.
+applyNWithCycleDetection :: Ord a => Int -> (a -> a) -> a -> a
+applyNWithCycleDetection n f x = go (M.singleton x n) n x
+  where
+    go !m !n !x 
+      | n == 0     = x
+      | otherwise  =
+                 let x'   = f x
+                     loop = maybe 0 (loopSize n) (M.lookup x' m)
+                     n'   = n - (1 + loop)
+                 in go (M.insert x' n' m) n' x'
+
+    loopSize n loopStart = let loopLen = loopStart - (n - 1)
+                               loops = (n - 1) `div` loopLen
+                            in loops * loopLen
+
 applyNM :: Monad m => Int -> (a -> m a) -> a -> m a
 applyNM n act a = foldl' (>>=) (pure a) (replicate n act)
+
+-- like applyNM, but detects cycles.
+applyNMWithCycleDetectionBy :: (Ord b, Monad m) => (a -> b) -> Int -> (a -> m a) -> a -> m a
+applyNMWithCycleDetectionBy k n f x = go (M.singleton (k x) n) n x
+  where
+    go !m !n !x 
+      | n == 0     = pure x
+      | otherwise  = do x' <- f x
+                        let key = k x'
+                            loop = maybe 0 (loopSize n) (M.lookup key m)
+                            n'   = n - (1 + loop)
+                            m'   = M.insert key n' m
+                        go m' n' x'
+
+    loopSize n loopStart = let loopLen = loopStart - (n - 1)
+                               loops = (n - 1) `div` loopLen
+                            in loops * loopLen
 
 cyclePred :: (Enum a, Eq a, Bounded a) => a -> a
 cyclePred x = if x == minBound then maxBound
@@ -80,8 +118,9 @@ cycleSucc :: (Enum a, Eq a, Bounded a) => a -> a
 cycleSucc x = if x == maxBound then minBound
                                else succ x
 
-best :: Ord b => (a -> b) -> [a] -> Maybe a
+best, lowest :: Ord b => (a -> b) -> [a] -> Maybe a
 best f = listToMaybe . sortOn (Down . f)
+lowest f = listToMaybe . sortOn f
 
 median :: Ord a => [a] -> Maybe a
 median xs = let xs' = sort xs
@@ -89,6 +128,9 @@ median xs = let xs' = sort xs
 
 bestTree :: (Monoid b, Ord b) => (a -> b) -> Forest a -> b
 bestTree f = maximum . (mempty :) . fmap ((<>) <$> f . rootLabel <*> bestTree f . subForest)
+
+count :: (a -> Bool) -> [a] -> Int
+count f = length . filter f
 
 collapseForest :: Monoid a => (Forest a -> a) -> Tree a -> a
 collapseForest f (Node a fs) = a <> f fs
@@ -155,6 +197,12 @@ unterleave = go ([],[])
   where
     go (xs,ys) (a:b:cs) = go (a:xs,b:ys) cs
     go (xs,ys) cs       = (reverse xs <> cs, reverse ys)
+
+withNext :: [a] -> [(a, Maybe a)]
+withNext xs = zip xs (fmap pure (drop 1 xs) <> [Nothing])
+
+fmapToSnd :: Functor f => (a -> b) -> f a -> f (a, b)
+fmapToSnd f = fmap $ \a -> (a, f a)
 
 -- I constantly confuse myself when using min/max to enforce
 -- bounds - this helps.

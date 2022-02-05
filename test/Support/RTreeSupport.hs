@@ -81,8 +81,6 @@ tree = RT.fromPoints . flip zip (repeat ())
 dbl :: a -> (a,a)
 dbl = (,) <$> id <*> id
 
--- not bad:
--- TODO: needs to be expanded (*1) to draw regions _outside_ the items they contain
 depict :: RTree Dim2 Char -> Depicted
 depict t = depictPoints
          . TS.depictOverlays dotted regions

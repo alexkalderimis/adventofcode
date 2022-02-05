@@ -1,28 +1,51 @@
-{-# LANGUAGE DeriveGeneric     #-}
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TupleSections     #-}
+{-# LANGUAGE OverloadedStrings  #-}
+{-# LANGUAGE NumericUnderscores #-}
 
 import           Control.Applicative
-import           Control.Monad
 import qualified Data.Array          as A
-import           Data.Foldable       (foldl')
-import           Data.List           (unfoldr)
-import qualified Data.Map.Strict     as M
-import           Data.Maybe
-import qualified Data.Set            as S
-import           System.Environment
-import           System.Exit
+import           Data.Array          ((//))
+import           Data.List.Extra
+import           Data.Functor
 import           Text.Printf
-import           Text.Read
+import           Control.Applicative.Combinators
+import           Text.Parser.Char (text)
+import qualified Data.Text as T
 
-import           Options.Generic
+import Elves
+import Elves.Advent
+import qualified Elves.StrictGrid as G
+import           Elves.Coord.Strict
+
+import Test.QuickCheck
 
 data Item = OpenGround | Trees | Lumberyard deriving (Show, Eq, Ord)
-type Coord = (Int,Int)
+data Surroundings = Surroundings { trees :: {-# UNPACK #-} !Int, lumberyards :: {-# UNPACK #-} !Int }
+  deriving (Show, Eq)
+
+type Coord = Coordinate
 
 type LandScape = A.Array Coord Item
 
-exampleInput = unlines
+instance Semigroup Surroundings where
+  (Surroundings ta la) <> (Surroundings tb lb) = Surroundings (ta + tb) (la + lb)
+
+instance Monoid Surroundings where
+  mempty = Surroundings 0 0
+
+nextItem :: Item -> Item
+nextItem OpenGround = Trees
+nextItem Trees = Lumberyard
+nextItem Lumberyard = OpenGround
+
+toSurroundings :: Item -> Surroundings
+toSurroundings OpenGround = mempty
+toSurroundings Trees      = Surroundings 1 0
+toSurroundings Lumberyard = Surroundings 0 1
+
+valueOf :: Surroundings -> Int
+valueOf (Surroundings a b) = a * b
+
+exampleInput = T.unlines
   [".#.#...|#."
   ,".....#|##|"
   ,".|..|...#."
@@ -35,103 +58,124 @@ exampleInput = unlines
   ,"...#.|..|."
   ]
 
-data Options = Options
-  { optN     :: Maybe String
-  , optDebug :: Bool
-  } deriving (Generic, Show)
-
-instance ParseRecord Options
-
 main :: IO ()
-main = do
-  opts <- getRecord "AOC Dec 18"
-  n <- case optN opts of
-        Just "pt1" -> pure 10
-        Just "pt2" -> pure 1000000000
-        Just  s    -> maybe (die $ "Bad argument : " ++ s) pure (readMaybe s)
-  getContents >>= run (optDebug opts) n
+main = day 18 parseInput
+              (print . valueOf . resourceValue . applyN 10 evolve)
+              (print . valueOf . resourceValue . applyNWithCycleDetection 1_000_000_000 evolve)
+              spec
 
-run :: Bool -> Int -> String -> IO ()
-run debug n input = do
-  let land = looping evolve n (parseInput input)
-  putStrLn (showLand land)
-  printf "Resource value: %d\n" (resourceValue land)
+spec = do
+  let Right land = parseOnly parseInput exampleInput
+  describe "evolve" $ do
+    let afterOneMinute = T.unlines [ ".......##."
+                                   , "......|###"
+                                   , ".|..|...#."
+                                   , "..|#||...#"
+                                   , "..##||.|#|"
+                                   , "...#||||.."
+                                   , "||...|||.."
+                                   , "|||||.||.|"
+                                   , "||||||||||"
+                                   , "....||..|."
+                                   ]
+    it "can evolve the initial state" $ do
+      let Right land' = parseOnly parseInput afterOneMinute
+      evolve land `shouldBe` land'
 
-looping :: Ord a => (a -> a) -> Int -> a -> a
-looping f n x = go (M.singleton x n) n x
-  where
-    go _ 0 x = x
-    go m n x =
-      let x'   = f x
-          loop = maybe 0 (loopSize n) (M.lookup x' m)
-          n'   = n - (1 + loop)
-      in go (M.insert x' n' m) n' x'
-    loopSize n loopStart = let loopLen = loopStart - (n - 1)
-                               loops = (n - 1) `div` loopLen
-                            in loops * loopLen
+  describe "pt1" $ do
+    let outcome = applyN 10 evolve land
+    it "has 37 wooded acres and 31 lumberyards" $ do
+      resourceValue outcome `shouldBe` Surroundings 37 31
 
-resourceValue :: LandScape -> Int
-resourceValue = uncurry (*) . foldl' translate (0,0) . fmap f . A.elems
-  where
-    f Trees      = (1,0)
-    f Lumberyard = (0,1)
-    f _          = (0,0)
+  describe "surroundings" $ do
+    it "produces realistic counts" $ 
+      forAll (chooseInt (0, 5)) $ \y ->
+      forAll (chooseInt (0, 5)) $ \x ->
+      forAll (vectorOf 25 (elements [Trees, Lumberyard, OpenGround])) $ \items ->
+        let land = A.listArray (Coord 0 0, Coord 5 5) (cycle items)
+            Surroundings t ly = surroundings land (Coord (Row y) (Col x))
+         in (t + ly) `shouldSatisfy` A.inRange (0, 8)
+
+  describe "transform" $ do
+    describe "an open acre" $ do
+      let acre = OpenGround
+
+      specify "surrounded by three or more trees becomes trees" $
+        forAll (arbitrary `suchThat` (>= 3)) $ \t ->
+        forAll arbitrary $ \ly ->
+          let s = Surroundings { trees = t, lumberyards = ly }
+           in transform s acre `shouldBe` Just Trees
+      specify "surrounded by fewer than three trees does not change" $
+        forAll (arbitrary `suchThat` (< 3)) $ \t ->
+        forAll arbitrary $ \ly ->
+          let s = Surroundings { trees = t, lumberyards = ly }
+           in transform s acre `shouldBe` Nothing
+
+    describe "an acre filled with trees" $ do
+      let acre = Trees
+
+      specify "will become a lumberyard if three or more adjacent acres were lumberyards." $
+        forAll (arbitrary `suchThat` (>= 3)) $ \ly ->
+        forAll arbitrary $ \t ->
+          let s = Surroundings { trees = t, lumberyards = ly }
+           in transform s acre `shouldBe` Just Lumberyard
+
+      specify "Otherwise, nothing happens." $
+        forAll (arbitrary `suchThat` (< 3)) $ \ly ->
+        forAll arbitrary $ \t ->
+          let s = Surroundings { trees = t, lumberyards = ly }
+           in transform s acre `shouldBe` Nothing
+
+    describe "An acre containing a lumberyard" $ do
+      let acre = Lumberyard
+
+      it "will remain a lumberyard if it was adjacent to at least one other lumberyard and at least one acre containing trees." $
+        forAll (arbitrary `suchThat` (>= 1)) $ \t ->
+        forAll (arbitrary `suchThat` (>= 1)) $ \ly ->
+          let s = Surroundings { trees = t, lumberyards = ly }
+           in transform s acre `shouldBe` Nothing
+
+      it "becomes open if not next to at least one lumberyard." $ 
+        forAll (arbitrary `suchThat` (>= 1)) $ \t ->
+        forAll (arbitrary `suchThat` (<  1)) $ \ly ->
+          let s = Surroundings { trees = t, lumberyards = ly }
+           in transform s acre `shouldBe` Just OpenGround
+
+      it "becomes open if not next to at least one acre of trees." $
+        forAll (arbitrary `suchThat` (<  1)) $ \t ->
+        forAll (arbitrary `suchThat` (>= 1)) $ \ly ->
+          let s = Surroundings { trees = t, lumberyards = ly }
+           in transform s acre `shouldBe` Just OpenGround
+
+resourceValue :: LandScape -> Surroundings
+resourceValue = foldMap toSurroundings . A.elems
 
 showLand :: LandScape -> String
-showLand land = unlines [row y | y <- [miny .. maxy]]
+showLand = G.draw . fmap cell
   where
-    ((miny,minx),(maxy,maxx)) = A.bounds land
-    row y = [cell (y,x) | x <- [minx .. maxx]]
-    cell pos = case land A.! pos of OpenGround -> '.'
-                                    Trees      -> '|'
-                                    Lumberyard -> '#'
+    cell OpenGround = '.'
+    cell Trees      = '|'
+    cell Lumberyard = '#'
 
-parseInput :: String -> LandScape
-parseInput str =
-  let strs = lines str
-      cells = [((y,x), cell c) | (y, row) <- zip [0 ..] strs
-                               , (x, c) <- zip [0 ..] row
-              ]
-      bounds = ((0,0), (length strs - 1, maximum (fmap length strs) - 1))
-   in A.array bounds cells
-  where
-    cell '.'  = OpenGround
-    cell '|'  = Trees
-    cell '#'  = Lumberyard
-    cell char = error $ "Unexpected character: " ++ [char]
-
-evolve :: LandScape -> LandScape
-evolve items = A.array (A.bounds items) (tick items <$> A.assocs items)
-
-tick :: LandScape -> (Coord, Item) -> (Coord, Item)
-tick items (pos, x) = (pos, tickWith (count neighbours) x)
-  where
-    neighbours = [items A.! p | shift <- [above, below, left, right, ul, ur, bl, br]
-                              , let p = shift pos
-                              , A.inRange (A.bounds items) p
+parseInput :: Parser LandScape
+parseInput = G.gridP $ choice [ text "." $> OpenGround
+                              , text "|" $> Trees
+                              , text "#" $> Lumberyard
                               ]
 
+evolve :: LandScape -> LandScape
+evolve items = items // (A.assocs items >>= tick)
+  where
+    tick (pos, x) = [ (pos, x') | x' <- transform (surroundings items pos) x ]
 
-tickWith :: M.Map Item Int -> Item -> Item
-tickWith m OpenGround | num Trees m >= 3 = Trees
-tickWith m Trees | num Lumberyard m >= 3 = Lumberyard
-tickWith m Lumberyard = if num Lumberyard m >= 1 && num Trees m >= 1
-                           then Lumberyard
-                           else OpenGround
-tickWith _ item = item
+{-# INLINE surroundings #-}
+surroundings :: LandScape -> Coord -> Surroundings
+surroundings items pos = foldMap (toSurroundings . (items A.!)) (G.nextCoords True (A.bounds items) pos)
 
-translate (dy,dx) (y,x) = (y + dy, x + dx)
-left = translate (0, -1)
-right = translate (0, 1)
-below = translate (1,0)
-above = translate (-1,0)
-ul = left . above
-ur = right . above
-bl = left . below
-br = right . below
-
-count :: [Item] -> M.Map Item Int
-count = M.fromListWith (+) . fmap (,1)
-
-num :: Item -> M.Map Item Int -> Int
-num = (fromMaybe 0 .) . M.lookup
+{-# INLINE transform #-}
+transform :: (MonadPlus m) => Surroundings -> Item -> m Item
+transform s item
+  | OpenGround <- item, trees s       >= 3               = pure Trees
+  | Trees      <- item, lumberyards s >= 3               = pure Lumberyard
+  | Lumberyard <- item, lumberyards s < 1 || trees s < 1 = pure OpenGround
+  | otherwise = mzero
